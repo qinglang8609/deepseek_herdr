@@ -1,0 +1,8 @@
+# dsh-agent-commander bundle patch
+#
+# Applied when the profile boots with this package in `dsh.profile.bundles`.
+# One `insert` mounts the plugin's Node half; the client half is served
+# automatically because the package declares `dsh.client.platform: web`.
+- insert:
+    - id: agent-commander
+      name: 'dsh-agent-commander'
