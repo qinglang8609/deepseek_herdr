@@ -113,8 +113,18 @@ const STATUS_LABEL = {
 // ---------------------------------------------------------------------------
 const PANEL_WIDTH_KEY = "dsh-agent-commander.panelWidth";
 const PANEL_WIDTH_DEFAULT = 380;
+const PANEL_COLLAPSED_KEY = "dsh-agent-commander.panelCollapsed";
+function isPanelCollapsed() {
+	try { return localStorage.getItem(PANEL_COLLAPSED_KEY) === "1"; }
+	catch { return false; }
+}
+function setPanelCollapsed(collapsed) {
+	try {
+		if (collapsed) localStorage.setItem(PANEL_COLLAPSED_KEY, "1");
+		else localStorage.removeItem(PANEL_COLLAPSED_KEY);
+	} catch {}
+}
 
-// The panel is always expanded (no collapse toggle — it caused layout bugs).
 function useDetailsColumn() {
 	const rootRef = useRef(null);
 	const [width, setWidth] = useState(() => {
@@ -125,7 +135,6 @@ function useDetailsColumn() {
 			return PANEL_WIDTH_DEFAULT;
 		}
 	});
-	// Latest width for the async enforce closure (avoids stale-closure bugs).
 	const stateRef = useRef({ width });
 	stateRef.current = { width };
 
@@ -133,13 +142,14 @@ function useDetailsColumn() {
 		try {
 			const root = rootRef.current;
 			if (root === null) return;
-			const column = root.parentElement; // grid item (.detailsCol)
-			const frame = column?.parentElement; // AppFrame grid
+			const column = root.parentElement;
+			const frame = column?.parentElement;
 			if (frame === null || frame === void 0) return;
 			let raf = 0;
 			const enforce = () => {
 				raf = 0;
 				try {
+					if (isPanelCollapsed()) return;
 					const w = stateRef.current.width;
 					const style = frame.style.gridTemplateColumns;
 					if (typeof style !== "string" || style === "") return;
@@ -153,15 +163,11 @@ function useDetailsColumn() {
 			const schedule = () => {
 				if (raf === 0) raf = requestAnimationFrame(enforce);
 			};
-			const observer = new MutationObserver(schedule);
-			observer.observe(frame, { attributes: true, attributeFilter: ["style", "data-details-collapsed"] });
 			schedule();
 			return () => {
-				observer.disconnect();
 				if (raf !== 0) cancelAnimationFrame(raf);
 			};
 		} catch {}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [width]);
 
 	useEffect(() => {
@@ -170,7 +176,6 @@ function useDetailsColumn() {
 		} catch {}
 	}, [width]);
 
-	// Drag handle on the panel's left edge to resize the sidebar width.
 	const onDragStart = useCallback((e) => {
 		e.preventDefault();
 		const startX = e.clientX;
@@ -202,6 +207,7 @@ function useDetailsColumn() {
 // Terminal view (vendored xterm + addon-fit + WebSocket bridge)
 // ---------------------------------------------------------------------------
 const AGENT_TYPES = ["claude", "opencode", "codex", "codebuddy", "pi", "qwen"];
+const COMPACT_SUPPORTED = new Set(["claude", "codebuddy", "qwen"]);
 
 function AgentTerminal({ agentId, signalRef }) {
 	const containerRef = useRef(null);
@@ -582,7 +588,7 @@ function MiniTerminal({ agentId }) {
 // ---------------------------------------------------------------------------
 // Agent cards (live mini-terminal per agent)
 // ---------------------------------------------------------------------------
-function AgentCards({ agents, onOpen, onNewSession, onCloseAgent }) {
+function AgentCards({ agents, onOpen, onCompact, onNewSession, onCloseAgent }) {
 	if (agents.length === 0) {
 		return h("div", { className: "dhac_empty" }, [
 			h("div", null, "还没有智能体"),
@@ -601,10 +607,19 @@ function AgentCards({ agents, onOpen, onNewSession, onCloseAgent }) {
 				h("span", { className: "dhac_agentName", title: agent.role || agent.cwd }, agent.name),
 				h("span", { className: "dhac_agentType" }, agent.type),
 				h("span", { className: "dhac_agentMeta" }, STATUS_LABEL[agent.status] ?? agent.status),
+				COMPACT_SUPPORTED.has(agent.type) && h("button", {
+					type: "button",
+					className: "dhac_cardClose",
+					title: "压缩会话（减少上下文）",
+					onClick: (e) => {
+						e.stopPropagation();
+						onCompact(agent.id);
+					}
+				}, "🗜"),
 				h("button", {
 					type: "button",
 					className: "dhac_cardClose",
-					title: "新会话（清空上下文）",
+					title: "清空会话历史",
 					onClick: (e) => {
 						e.stopPropagation();
 						onNewSession(agent.id);
@@ -630,14 +645,15 @@ function AgentCards({ agents, onOpen, onNewSession, onCloseAgent }) {
 	));
 }
 
-function TerminalDetail({ agent, onBack, onNewSession, onCloseAgent }) {
+function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent }) {
 	const signalRef = useRef(null);
 	return h("div", { className: "dhac_root" }, [
 		h("div", { className: "dhac_toolbar" }, [
 			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, "‹"),
 			h("span", { className: "dhac_toolbarName", title: `${agent.name} · ${agent.cwd}` }, `${agent.name} (${agent.type})`),
 			h("span", { className: "dhac_agentMeta" }, STATUS_LABEL[agent.status] ?? agent.status),
-			h("button", { type: "button", className: "dhac_iconButton", title: "新会话（清空上下文）", onClick: () => onNewSession(agent.id) }, "↺"),
+			COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, "🗜"),
+			h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, "↺"),
 			h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, "⏹"),
 			h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, "✕")
 		]),
@@ -683,76 +699,12 @@ var SafePanel = class extends react.Component {
 };
 
 // ---------------------------------------------------------------------------
-// Cache dialog: per-agent cache sizes + one-click compression
-// ---------------------------------------------------------------------------
-function fmtBytes(n) {
-	if (!Number.isFinite(n) || n <= 0) return "0 B";
-	const units = ["B", "KB", "MB", "GB"];
-	let i = 0;
-	let v = n;
-	while (v >= 1024 && i < units.length - 1) {
-		v /= 1024;
-		i += 1;
-	}
-	return `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
-}
-
-function CacheDialog({ onClose }) {
-	const [data, setData] = useState(null);
-	const [busy, setBusy] = useState(false);
-	const [message, setMessage] = useState(null);
-	const load = () => {
-		apiGet("/cache").then((v) => setData(v?.agents ?? [])).catch(() => setData([]));
-	};
-	useEffect(load, []);
-	const compress = async () => {
-		setBusy(true);
-		setMessage(null);
-		try {
-			const v = await apiPost("/cache/compress", {});
-			const results = v?.results ?? [];
-			const freed = results.reduce((sum, r) => sum + (r?.freed ?? 0), 0);
-			setMessage(`压缩完成，释放 ${fmtBytes(freed)}`);
-			load();
-		} catch (err) {
-			setMessage(`压缩失败：${err instanceof Error ? err.message : String(err)}`);
-		} finally {
-			setBusy(false);
-		}
-	};
-	const total = (data ?? []).reduce((sum, a) => sum + (a?.total ?? 0), 0);
-	return h("div", { className: "dhac_modal", onClick: (e) => { if (e.target === e.currentTarget) onClose(); } }, [
-		h("div", { className: "dhac_dialog" }, [
-			h("div", { className: "dhac_dialogTitle" }, "智能体缓存"),
-			h("div", { className: "dhac_dialogBody" }, [
-				(data ?? []).length === 0
-					? h("div", { className: "dhac_hint" }, "没有已打开的智能体")
-					: h("div", null,
-						(data ?? []).map((a) =>
-							h("div", { key: a.type + a.dirs?.[0]?.path, className: "dhac_cacheRow" }, [
-								h("span", { className: "dhac_agentName", style: { flex: "1" } }, `${a.type} · ${fmtBytes(a.total ?? 0)}`),
-								h("div", { className: "dhac_cachePaths" },
-									(a.dirs ?? []).map((d) => h("div", { key: d.path, className: "dhac_cachePath" }, `${d.path} — ${fmtBytes(d.size)}`)))
-							]))),
-				h("div", { className: "dhac_hint" }, `总计：${fmtBytes(total)}。压缩 = SQLite VACUUM + 超过 1 天的会话日志打包为 .gz`),
-				message !== null && h("div", { className: "dhac_error" }, message)
-			]),
-			h("div", { className: "dhac_dialogActions" }, [
-				h("button", { type: "button", className: "dhac_btn", onClick: onClose, disabled: busy }, "关闭"),
-				h("button", { type: "button", className: "dhac_btn dhac_btnPrimary", onClick: compress, disabled: busy || (data ?? []).length === 0 }, busy ? "压缩中…" : "一键压缩缓存")
-			])
-		])
-	]);
-}
-
-// ---------------------------------------------------------------------------
 // Radar panel — registered into the real "details" column slot
 // ---------------------------------------------------------------------------
 function RadarPanel(props) {
 	const [agents, setAgentsState] = useState(getAgents);
 	const [detailId, setDetailId] = useState(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
-	const [cacheOpen, setCacheOpen] = useState(false);
 	const [toasts, setToasts] = useState([]);
 	const { rootRef, onDragStart } = useDetailsColumn();
 	const sessionId = props.sessionId;
@@ -812,13 +764,17 @@ function RadarPanel(props) {
 			await apiPost(`/agents/${encodeURIComponent(id)}/new-session`, {});
 		} catch {}
 	};
+	const compactSession = async (id) => {
+		try {
+			await apiPost(`/agents/${encodeURIComponent(id)}/compact`, {});
+		} catch {}
+	};
 
 	return h("div", { ref: rootRef, className: "dhac_root" }, [
 		h("div", { className: "dhac_resizeHandle", title: "拖拽调整宽度", onPointerDown: onDragStart }),
 		h("div", { className: "dhac_header" }, [
 			h("span", { className: "dhac_headerTitle" }, "智能体雷达"),
 			h("span", { className: "dhac_count" }, String(agents.length)),
-			h("button", { type: "button", className: "dhac_iconButton", title: "缓存管理", onClick: () => setCacheOpen(true) }, "🧹"),
 			h("button", { type: "button", className: "dhac_iconButton", title: "刷新", onClick: refresh }, "↻"),
 			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, "＋ 新建")
 		]),
@@ -827,8 +783,8 @@ function RadarPanel(props) {
 				h("div", { key: t.id, className: `dhac_toast dhac_toast_${t.kind}` }, t.text))),
 		h("div", { className: "dhac_body" },
 			detail !== void 0
-				? h(TerminalDetail, { agent: detail, onBack: () => setDetailId(null), onNewSession: newSession, onCloseAgent: closeAgent })
-				: h(AgentCards, { agents, onOpen: (agent) => setDetailId(agent.id), onNewSession: newSession, onCloseAgent: closeAgent })),
+				? h(TerminalDetail, { agent: detail, onBack: () => setDetailId(null), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent })
+				: h(AgentCards, { agents, onOpen: (agent) => setDetailId(agent.id), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent })),
 		dialogOpen &&
 			h(NewAgentDialog, {
 				sessionId,
@@ -837,8 +793,7 @@ function RadarPanel(props) {
 				defaultCwd: sessionCwd,
 				onClose: () => setDialogOpen(false),
 				onCreated: refresh
-			}),
-		cacheOpen && h(CacheDialog, { onClose: () => setCacheOpen(false) })
+			})
 	]);
 }
 
@@ -873,10 +828,7 @@ function apply(ctx) {
 				close: (id, graceful) => apiDelete(`/agents/${encodeURIComponent(id)}?graceful=${graceful === false ? "0" : "1"}`),
 				status: (id) => apiGet(`/agents/${encodeURIComponent(id)}/status`),
 				newSession: (id) => apiPost(`/agents/${encodeURIComponent(id)}/new-session`, {}),
-				cache: {
-					list: () => apiGet("/cache").then((v) => v?.agents ?? []),
-					compress: () => apiPost("/cache/compress", {})
-				},
+				compactSession: (id) => apiPost(`/agents/${encodeURIComponent(id)}/compact`, {}),
 				memory: {
 					list: (ns) => apiGet(`/memory${ns ? `?namespace=${encodeURIComponent(ns)}` : ""}`).then((v) => v?.entries ?? []),
 					search: (q) => apiGet(`/memory/search?q=${encodeURIComponent(q)}`).then((v) => v?.entries ?? []),
@@ -901,7 +853,13 @@ function apply(ctx) {
 			// Global safety net: keep the details column track open even if the
 			// panel itself ever crashes — decoupled from RadarPanel's lifecycle.
 			const enforce = () => {
+				// Reset the rAF guard first — without this the observer is
+				// one-shot: after the first mutation raf stays truthy and every
+				// later schedule() no-ops, so switching to a new (blank) session
+				// zeroes the details track and the sidebar never comes back.
+				raf = 0;
 				try {
+					if (isPanelCollapsed()) return;
 					const outlet = document.querySelector('[data-slot="details"]');
 					const column = outlet?.parentElement;
 					const frame = column?.parentElement;
@@ -929,19 +887,125 @@ function apply(ctx) {
 				if (raf !== 0) cancelAnimationFrame(raf);
 			};
 		}, "dsh-agent-commander: global column enforcement");
-		ctx.effect(() => {
-			// Make the app open the details column (used once the session is
-			// non-blank; the width-enforcement hooks cover blank sessions).
-			let tries = 0;
-			const timer = setInterval(() => {
-				tries += 1;
-				try {
-					ctx.layout.openDetails();
-					clearInterval(timer);
-				} catch {
-					if (tries > 10) clearInterval(timer);
+		// Helper: find the AppFrame grid element and enforce details column width.
+		function enforceDetailsWidth(forceOpen) {
+			try {
+				// Try multiple selectors to find the grid frame.
+				const outlet = document.querySelector('[data-slot="details"]')
+					|| document.querySelector('.detailsCol')
+					|| document.querySelector('[class*="details"]');
+				const column = outlet?.parentElement;
+				const frame = column?.parentElement;
+				if (!frame) return;
+				const style = frame.style.gridTemplateColumns;
+				if (typeof style !== "string" || style === "") return;
+				const last = style.match(/(\S+)\s*$/)?.[1];
+				if (forceOpen) {
+					if (last === "0px" || last === "0") {
+						const w = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+						const width = Number.isFinite(w) && w >= 280 && w <= 620 ? w : PANEL_WIDTH_DEFAULT;
+						frame.style.gridTemplateColumns = style.replace(/(\S+)\s*$/, `${width}px`);
+						frame.removeAttribute("data-details-collapsed");
+					}
+				} else {
+					if (last !== "0px" && last !== "0") {
+						frame.style.gridTemplateColumns = style.replace(/(\S+)\s*$/, "0px");
+						frame.setAttribute("data-details-collapsed", "");
+					}
 				}
-			}, 500);
+			} catch {}
+		}
+		// Periodic enforcement: keeps sidebar open unless user collapsed it.
+		ctx.effect(() => {
+			const timer = setInterval(() => {
+				if (!isPanelCollapsed()) enforceDetailsWidth(true);
+			}, 800);
+			return () => clearInterval(timer);
+		}, "dsh-agent-commander: periodic enforcement");
+		// Floating toggle button on the main interface: always visible, clicks
+		// pop the Agent Radar sidebar in / out. It auto-positions just LEFT of
+		// the details column when the panel is open (so it never covers the
+		// radar's own header), otherwise at the window's right edge.
+		ctx.effect(() => {
+			const cluster = document.createElement("div");
+			cluster.className = "dhac_toggleCluster";
+			const btn = document.createElement("button");
+			btn.type = "button";
+			btn.className = "dhac_toggleButton";
+			btn.title = "智能体雷达（点击弹出/收起侧边栏）";
+			const icon = document.createElement("span");
+			icon.className = "dhac_toggleIcon";
+			icon.textContent = "🤖";
+			const label = document.createElement("span");
+			label.className = "dhac_toggleLabel";
+			label.textContent = "雷达";
+			btn.appendChild(icon);
+			btn.appendChild(label);
+			btn.addEventListener("click", () => {
+				const collapsed = isPanelCollapsed();
+				if (collapsed) {
+					// Pop the sidebar open.
+					setPanelCollapsed(false);
+					enforceDetailsWidth(true);
+					try { ctx.layout.openDetails(); } catch {}
+				} else {
+					// Collapse it again.
+					setPanelCollapsed(true);
+					enforceDetailsWidth(false);
+					try { ctx.layout.closeDetails(); } catch {}
+				}
+				sync();
+			});
+			cluster.appendChild(btn);
+			document.body.appendChild(cluster);
+			// Read the frame's current details track width (0 = closed).
+			const detailsWidth = () => {
+				try {
+					const outlet = document.querySelector('[data-slot="details"]');
+					const frame = outlet?.parentElement?.parentElement;
+					if (!frame) return 0;
+					const style = frame.style.gridTemplateColumns;
+					if (typeof style !== "string" || style === "") return 0;
+					const last = style.match(/(\S+)\s*$/)?.[1];
+					if (last === void 0 || last === "0px" || last === "0") return 0;
+					const n = Number.parseFloat(last);
+					return Number.isFinite(n) && n > 0 ? n : 0;
+				} catch {
+					return 0;
+				}
+			};
+			// Keep the button next to the details column edge (never on top of it).
+			const sync = () => {
+				try {
+					const w = detailsWidth();
+					const open = !isPanelCollapsed() && w > 0;
+					cluster.style.right = `${w > 0 ? w + 10 : 12}px`;
+					cluster.classList.toggle("dhac_toggleCluster_open", open);
+				} catch {}
+			};
+			sync();
+			const syncTimer = setInterval(sync, 600);
+			let raf = 0;
+			const scheduleSync = () => {
+				if (raf === 0) raf = requestAnimationFrame(() => {
+					raf = 0;
+					sync();
+				});
+			};
+			const observer = new MutationObserver(scheduleSync);
+			observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["style", "data-details-collapsed"] });
+			return () => {
+				clearInterval(syncTimer);
+				observer.disconnect();
+				if (raf !== 0) cancelAnimationFrame(raf);
+				cluster.remove();
+			};
+		}, "dsh-agent-commander: toggle button");
+		ctx.effect(() => {
+			// Register the RadarPanel into the details slot and try to open it.
+			if (!isPanelCollapsed()) {
+				try { ctx.layout.openDetails(); } catch {}
+			}
 			let disposeRegistration = () => {};
 			try {
 				disposeRegistration = ctx.slots.register({
@@ -953,7 +1017,6 @@ function apply(ctx) {
 				fail("register", error);
 			}
 			return () => {
-				clearInterval(timer);
 				disposeRegistration();
 			};
 		}, "dsh-agent-commander: details registration");
