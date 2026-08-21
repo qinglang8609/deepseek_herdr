@@ -1,0 +1,559 @@
+/* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */
+.dhac_toggleCluster {
+	z-index: 45;
+	position: fixed;
+	top: 3px;
+	right: 10px;
+	display: flex;
+	flex-direction: row;
+	gap: 4px;
+}
+body[data-dsh-title-bar-compat] .dhac_toggleCluster {
+	top: calc(var(--dsh-title-bar-strip, 40px) + 3px);
+}
+.dhac_toggleButton {
+	width: 28px;
+	height: 28px;
+	color: var(--dsw-alias-label-secondary);
+	cursor: pointer;
+	background: none;
+	border: none;
+	border-radius: 50%;
+	justify-content: center;
+	align-items: center;
+	display: flex;
+}
+.dhac_toggleButton:hover {
+	background: var(--dsw-alias-interactive-bg-hover);
+	color: var(--dsw-alias-label-primary);
+}
+.dhac_root {
+	height: 100%;
+	min-height: 0;
+	background: var(--dsw-alias-bg-base);
+	flex-direction: column;
+	display: flex;
+	position: relative;
+}
+.dhac_header {
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-layer-1);
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	min-height: 38px;
+	padding: 0 8px 0 12px;
+	display: flex;
+}
+.dhac_headerTitle {
+	min-width: 0;
+	font: var(--dsw-font-xs-strong-13);
+	color: var(--dsw-alias-label-primary);
+	white-space: nowrap;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.dhac_count {
+	min-width: 18px;
+	height: 16px;
+	font: var(--dsw-font-xxxs-strong-11);
+	color: var(--dsw-alias-label-secondary);
+	background: var(--dsw-alias-interactive-bg-hover);
+	border-radius: 8px;
+	flex: none;
+	justify-content: center;
+	align-items: center;
+	display: inline-flex;
+	padding: 0 5px;
+}
+.dhac_iconButton {
+	width: 26px;
+	height: 26px;
+	color: var(--dsw-alias-label-secondary);
+	cursor: pointer;
+	background: none;
+	border: none;
+	border-radius: 6px;
+	flex: none;
+	justify-content: center;
+	align-items: center;
+	padding: 0;
+	display: inline-flex;
+	font-size: 14px;
+}
+.dhac_iconButton:hover:not(:disabled) {
+	background: var(--dsw-alias-interactive-bg-hover);
+	color: var(--dsw-alias-label-primary);
+}
+.dhac_iconButton:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.dhac_addButton {
+	background: var(--dsw-alias-button-primary-fill);
+	height: 24px;
+	color: var(--dsw-alias-label-primary-inverted);
+	font: var(--dsw-font-xxs-strong-12);
+	cursor: pointer;
+	border: none;
+	border-radius: 6px;
+	flex: none;
+	align-items: center;
+	gap: 4px;
+	padding: 0 10px;
+	display: inline-flex;
+}
+.dhac_addButton:hover {
+	background: var(--dsw-alias-button-primary-hover);
+}
+.dhac_body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 4px 6px 8px;
+}
+.dhac_empty {
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-tertiary);
+	text-align: center;
+	justify-content: center;
+	align-items: center;
+	gap: 6px;
+	min-height: 120px;
+	flex-direction: column;
+	display: flex;
+	padding: 16px;
+}
+.dhac_emptyHint {
+	opacity: 0.85;
+}
+.dhac_agent {
+	border: 1px solid transparent;
+	cursor: pointer;
+	text-align: left;
+	background: none;
+	width: 100%;
+	border-radius: 8px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 2px;
+	margin: 2px 0;
+	padding: 6px 8px;
+	display: flex;
+}
+.dhac_agent:hover {
+	background: var(--dsw-alias-interactive-bg-hover);
+}
+.dhac_agentActive {
+	background: var(--dsw-alias-interactive-bg-active);
+	border-color: var(--dsw-alias-border-l1);
+}
+.dhac_agentTop {
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	display: flex;
+}
+.dhac_statusDot {
+	border-radius: 50%;
+	flex: none;
+	width: 7px;
+	height: 7px;
+}
+.dhac_statusDot[data-status="working"] {
+	background: var(--dsw-alias-state-warn-primary);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);
+	animation: dhacPulse 1.6s ease-in-out infinite;
+}
+.dhac_statusDot[data-status="idle"] {
+	background: var(--dsw-alias-state-success-primary);
+}
+.dhac_statusDot[data-status="blocked"] {
+	background: var(--dsw-alias-state-error-primary);
+}
+.dhac_statusDot[data-status="exited"] {
+	background: var(--dsw-alias-label-tertiary);
+}
+@keyframes dhacPulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+.dhac_agentName {
+	min-width: 0;
+	font: var(--dsw-font-xxs-strong-12);
+	color: var(--dsw-alias-label-primary);
+	white-space: nowrap;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.dhac_agentType {
+	font: var(--dsw-font-xxxs-strong-11);
+	color: var(--dsw-alias-label-tertiary);
+	background: var(--dsw-alias-interactive-bg-hover);
+	border-radius: 4px;
+	flex: none;
+	padding: 1px 5px;
+}
+.dhac_agentRole {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding-left: 13px;
+}
+.dhac_agentMeta {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	padding-left: 13px;
+}
+.dhac_toolbar {
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-layer-1);
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	min-height: 36px;
+	padding: 0 8px;
+	display: flex;
+}
+.dhac_toolbarName {
+	min-width: 0;
+	font: var(--dsw-font-xxs-strong-12);
+	color: var(--dsw-alias-label-primary);
+	white-space: nowrap;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.dhac_terminalWrap {
+	flex: 1;
+	min-height: 0;
+	background: var(--dsw-alias-bg-base);
+	flex-direction: column;
+	display: flex;
+	position: relative;
+}
+.dhac_terminal {
+	flex: 1;
+	min-height: 0;
+	padding: 6px 4px 6px 8px;
+}
+.dhac_terminal .xterm {
+	height: 100%;
+}
+.dhac_terminalBanner {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	background: var(--dsw-alias-bg-layer-1);
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 10px;
+	display: flex;
+}
+.dhac_modal {
+	position: fixed;
+	inset: 0;
+	z-index: 1000;
+	background: rgb(0 0 0 / 45%);
+	justify-content: center;
+	align-items: center;
+	display: flex;
+}
+.dhac_dialog {
+	background: var(--dsw-alias-bg-layer-1);
+	border: 1px solid var(--dsw-alias-border-l2);
+	box-shadow: var(--dsw-shadow-lv3);
+	width: min(440px, calc(100vw - 48px));
+	max-height: calc(100vh - 96px);
+	border-radius: 12px;
+	flex-direction: column;
+	display: flex;
+	overflow: hidden;
+}
+.dhac_dialogTitle {
+	font: var(--dsw-font-s-strong-14);
+	color: var(--dsw-alias-label-primary);
+	flex: none;
+	padding: 14px 16px 8px;
+}
+.dhac_dialogBody {
+	flex: 1;
+	min-height: 0;
+	gap: 10px;
+	overflow-y: auto;
+	flex-direction: column;
+	display: flex;
+	padding: 4px 16px 12px;
+}
+.dhac_field {
+	flex-direction: column;
+	gap: 4px;
+	display: flex;
+}
+.dhac_fieldLabel {
+	font: var(--dsw-font-xxs-strong-12);
+	color: var(--dsw-alias-label-secondary);
+}
+.dhac_input,
+.dhac_textarea,
+.dhac_select {
+	border: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-base);
+	width: 100%;
+	color: var(--dsw-alias-label-primary);
+	font: var(--dsw-font-xxs-12);
+	border-radius: 6px;
+	padding: 6px 8px;
+	box-sizing: border-box;
+}
+.dhac_input:focus,
+.dhac_textarea:focus,
+.dhac_select:focus {
+	border-color: var(--dsw-alias-border-l2);
+	outline: none;
+}
+.dhac_textarea {
+	min-height: 64px;
+	resize: vertical;
+	line-height: 1.5;
+}
+.dhac_presets {
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	display: flex;
+}
+.dhac_preset {
+	border: 1px solid var(--dsw-alias-border-l2);
+	background: var(--dsw-alias-bg-layer-2);
+	color: var(--dsw-alias-label-secondary);
+	font: var(--dsw-font-xxxs-11);
+	cursor: pointer;
+	border-radius: 999px;
+	flex: none;
+	padding: 2px 8px;
+}
+.dhac_preset:hover {
+	background: var(--dsw-alias-interactive-bg-hover);
+	color: var(--dsw-alias-label-primary);
+}
+.dhac_skills {
+	flex-wrap: wrap;
+	gap: 4px;
+	max-height: 96px;
+	align-items: center;
+	overflow-y: auto;
+	display: flex;
+}
+.dhac_skill {
+	border: 1px solid var(--dsw-alias-border-l2);
+	background: var(--dsw-alias-bg-layer-2);
+	color: var(--dsw-alias-label-secondary);
+	font: var(--dsw-font-xxxs-11);
+	cursor: pointer;
+	border-radius: 6px;
+	flex: none;
+	align-items: center;
+	gap: 4px;
+	padding: 2px 8px;
+	display: inline-flex;
+}
+.dhac_skillSelected {
+	background: var(--dsw-alias-interactive-bg-active);
+	color: var(--dsw-alias-label-primary);
+	border-color: var(--dsw-alias-border-l2);
+}
+.dhac_skill input {
+	accent-color: var(--dsw-alias-brand-primary);
+	margin: 0;
+}
+.dhac_dialogActions {
+	border-top: 1px solid var(--dsw-alias-border-l1);
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	justify-content: flex-end;
+	padding: 10px 16px;
+	display: flex;
+}
+.dhac_btn {
+	border: 1px solid var(--dsw-alias-border-l2);
+	background: var(--dsw-alias-bg-layer-2);
+	height: 28px;
+	color: var(--dsw-alias-label-primary);
+	font: var(--dsw-font-xxs-strong-12);
+	cursor: pointer;
+	border-radius: 6px;
+	flex: none;
+	padding: 0 14px;
+}
+.dhac_btn:hover:not(:disabled) {
+	background: var(--dsw-alias-interactive-bg-hover);
+}
+.dhac_btn:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+.dhac_btnPrimary {
+	background: var(--dsw-alias-button-primary-fill);
+	border-color: transparent;
+	color: var(--dsw-alias-label-primary-inverted);
+}
+.dhac_btnPrimary:hover:not(:disabled) {
+	background: var(--dsw-alias-button-primary-hover);
+}
+.dhac_error {
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-state-error-primary);
+}
+.dhac_hint {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	line-height: 1.5;
+}
+
+/* ---- live terminal cards ---- */
+.dhac_cards {
+	flex-direction: column;
+	gap: 8px;
+	display: flex;
+}
+.dhac_card {
+	border: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-layer-1);
+	cursor: pointer;
+	border-radius: 8px;
+	flex-direction: column;
+	min-width: 0;
+	display: flex;
+	overflow: hidden;
+}
+.dhac_card:hover {
+	border-color: var(--dsw-alias-border-l2);
+}
+.dhac_cardHeader {
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	flex: none;
+	padding: 4px 6px 4px 8px;
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	display: flex;
+}
+.dhac_cardClose {
+	width: 20px;
+	height: 20px;
+	color: var(--dsw-alias-label-tertiary);
+	cursor: pointer;
+	background: none;
+	border: none;
+	border-radius: 4px;
+	flex: none;
+	justify-content: center;
+	align-items: center;
+	padding: 0;
+	display: inline-flex;
+	font-size: 11px;
+}
+.dhac_cardClose:hover {
+	background: var(--dsw-alias-interactive-bg-hover);
+	color: var(--dsw-alias-label-primary);
+}
+.dhac_miniTermWrap {
+	height: 148px;
+	flex: none;
+	padding: 2px 4px 2px 6px;
+	position: relative;
+}
+.dhac_miniTerm {
+	width: 100%;
+	height: 100%;
+}
+.dhac_miniTerm .xterm {
+	height: 100%;
+}
+.dhac_cardExited {
+	height: 148px;
+	flex: none;
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-tertiary);
+	justify-content: center;
+	align-items: center;
+	display: flex;
+}
+
+/* ---- resize handle + status toasts ---- */
+.dhac_resizeHandle {
+	cursor: col-resize;
+	touch-action: none;
+	z-index: 3;
+	width: 8px;
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -4px;
+}
+.dhac_resizeHandle:hover,
+.dhac_resizeHandle:active {
+	background: var(--dsw-alias-interactive-bg-hover-accent);
+}
+.dhac_toasts {
+	z-index: 30;
+	pointer-events: none;
+	gap: 6px;
+	flex-direction: column;
+	align-items: center;
+	display: flex;
+	position: absolute;
+	bottom: 12px;
+	left: 8px;
+	right: 8px;
+}
+.dhac_toast {
+	pointer-events: auto;
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-primary);
+	background: var(--dsw-alias-bg-layer-2);
+	border: 1px solid var(--dsw-alias-border-l2);
+	box-shadow: var(--dsw-shadow-lv1);
+	max-width: 100%;
+	border-radius: 8px;
+	padding: 6px 10px;
+	white-space: normal;
+}
+.dhac_toast_done {
+	border-color: var(--dsw-alias-state-success-primary);
+}
+.dhac_toast_exit {
+	border-color: var(--dsw-alias-label-tertiary);
+}
+.dhac_toast_create {
+	border-color: var(--dsw-alias-state-business-primary);
+}
+
+/* ---- cache dialog ---- */
+.dhac_cacheRow {
+	border: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-base);
+	border-radius: 8px;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 10px;
+	display: flex;
+}
+.dhac_cachePaths {
+	flex-direction: column;
+	gap: 1px;
+	display: flex;
+}
+.dhac_cachePath {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	word-break: break-all;
+}
