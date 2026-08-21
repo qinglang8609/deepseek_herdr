@@ -64,6 +64,17 @@ const NEW_SESSION_COMMANDS = {
 	codex: "/new",
 	pi: "/new"
 };
+/**
+* Compact-session command per engine: compresses the current conversation
+* context to reduce token usage without starting a fresh session.
+* claude/codebuddy/qwen use /compact; opencode/codex/pi have no known
+* compact command so we omit them (the UI disables the button for those).
+*/
+const COMPACT_SESSION_COMMANDS = {
+	claude: "/compact",
+	codebuddy: "/compact",
+	qwen: "/compact"
+};
 /** Plugin data dir for the global workspace index (survives restarts, independent of any project). */
 function dshDataDir() {
 	return join(homedir(), ".dsh", "agent-commander");
@@ -833,6 +844,19 @@ var AgentRegistry = class {
 		}, 150);
 		handle.updatedAt = Date.now();
 	}
+	/** Compact the current session context (per-engine command, two-phase submit). Reduces token usage by summarizing without clearing history. */
+	compactSession(id) {
+		const handle = this.requireLive(id);
+		const cmd = COMPACT_SESSION_COMMANDS[handle.type];
+		if (!cmd) throw new Error(`agent type "${handle.type}" does not support session compaction`);
+		handle.pty.write(cmd);
+		setTimeout(() => {
+			try {
+				handle.pty.write("\r");
+			} catch {}
+		}, 150);
+		handle.updatedAt = Date.now();
+	}
 	// ---------------------------------------------------------------------------
 	// Cache introspection / compression (per engine)
 	// ---------------------------------------------------------------------------
@@ -1443,6 +1467,33 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 		}
 	}));
 	register(defineTool({
+		name: "agent_compact",
+		description: "Compact an agent's current session context — reduces token usage by summarizing without clearing history. Use when an agent's context is getting long and you want to free up tokens. Supports: claude (/compact), codebuddy (/compact), qwen (/compact).",
+		parameters: {
+			id: {
+				type: "string",
+				required: true,
+				description: "Agent id."
+			}
+		},
+		output: {
+			schema: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					id: { type: "string", required: true },
+					compacted: { type: "boolean", required: true }
+				}
+			},
+			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送压缩会话命令。` }]
+		},
+		execute: (args, exec) => {
+			exec.signal.throwIfAborted();
+			registry.compactSession(args.id);
+			return Promise.resolve({ id: args.id, compacted: true });
+		}
+	}));
+	register(defineTool({
 		name: "mem_query",
 		description: "Query the team's SQLite knowledge base (.deepseek/memory.db) — the shared memory layer every agent reads/writes. Returns matching memory entries (experience/facts/decisions/pitfalls). Use before starting a task to recall what the team already learned.",
 		parameters: {
@@ -1597,7 +1648,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 				return;
 			}
 			// Standard agent methods: send / read / approve / signal / status / new-session
-			const agentMatch = path.match(/^\/agents\/([^/]+)\/(send|read|approve|signal|status|new-session)$/);
+			const agentMatch = path.match(/^\/agents\/([^/]+)\/(send|read|approve|signal|status|new-session|compact)$/);
 			if (agentMatch !== null) {
 				const [, id, op] = agentMatch;
 				if (op === "send" && req.method === "POST") {
@@ -1626,6 +1677,11 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 				if (op === "new-session" && req.method === "POST") {
 					registry.newSession(id);
 					writeOk(res, { id, newSession: true });
+					return;
+				}
+				if (op === "compact" && req.method === "POST") {
+					registry.compactSession(id);
+					writeOk(res, { id, compacted: true });
 					return;
 				}
 				if (op === "status" && req.method === "GET") {

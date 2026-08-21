@@ -1,31 +1,62 @@
 /* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */
 .dhac_toggleCluster {
-	z-index: 45;
+	z-index: 2147483646;
 	position: fixed;
-	top: 3px;
-	right: 10px;
+	top: 10px;
+	right: 12px;
 	display: flex;
 	flex-direction: row;
 	gap: 4px;
+	transition: right 0.18s var(--ds-ease-in-out, ease);
+}
+/* Desktop app: sit below the native title-bar strip so the button stays
+   clickable (the strip is a window drag region, not a button surface). */
+html[data-dsh-desktop="true"] .dhac_toggleCluster {
+	top: calc(var(--dsh-desktop-titlebar-inset, 40px) + 8px);
 }
 body[data-dsh-title-bar-compat] .dhac_toggleCluster {
-	top: calc(var(--dsh-title-bar-strip, 40px) + 3px);
+	top: calc(var(--dsh-title-bar-strip, 40px) + 8px);
 }
 .dhac_toggleButton {
-	width: 28px;
-	height: 28px;
-	color: var(--dsw-alias-label-secondary);
+	-webkit-app-region: no-drag;
+	height: 32px;
+	padding: 0 12px;
+	gap: 6px;
+	color: var(--dsw-alias-label-secondary, #aaa);
 	cursor: pointer;
-	background: none;
-	border: none;
-	border-radius: 50%;
+	background: var(--dsw-alias-bg-layer-1, #222);
+	border: 1px solid var(--dsw-alias-border-l2, #555);
+	border-radius: 999px;
 	justify-content: center;
 	align-items: center;
-	display: flex;
+	display: inline-flex;
+	font: var(--dsw-font-xxxs-strong-11);
+	box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+	transition: background 0.15s, color 0.15s, transform 0.1s, border-radius 0.18s, width 0.18s;
+}
+.dhac_toggleIcon {
+	font-size: 15px;
+	line-height: 1;
+}
+.dhac_toggleLabel {
+	white-space: nowrap;
 }
 .dhac_toggleButton:hover {
-	background: var(--dsw-alias-interactive-bg-hover);
-	color: var(--dsw-alias-label-primary);
+	background: var(--dsw-alias-interactive-bg-hover, #333);
+	color: var(--dsw-alias-label-primary, #fff);
+	transform: scale(1.05);
+}
+.dhac_toggleButton:active {
+	transform: scale(0.95);
+}
+/* Panel open: compact icon-only circle docked to the details-column edge. */
+.dhac_toggleCluster_open .dhac_toggleButton {
+	width: 32px;
+	padding: 0;
+	border-radius: 50%;
+}
+.dhac_toggleCluster_open .dhac_toggleLabel {
+	display: none;
 }
 .dhac_root {
 	height: 100%;
