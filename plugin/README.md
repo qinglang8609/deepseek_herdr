@@ -21,12 +21,24 @@
 - **智能体雷达（右侧详情栏）**：所有已打开的智能体列表，实时状态徽标
   （working / idle / blocked / exited）、角色、工作目录；点击任一智能体展开
   **实时终端**（xterm + WebSocket + node-pty），可直接打字与智能体交互
+- **工作区隔离 + 自动重检**：雷达列表**按当前工作区（会话工作目录）隔离**，
+  只显示本文件夹（含子目录）的智能体；**每次切换工作区都会自动重新检测**——
+  扫描该文件夹 `.deepseek/agents.json`，恢复其中未运行的已保存智能体；
+  面板头部显示当前文件夹，↻ 按钮可手动重新检测（`agent_list` 工具同样按
+  当前工作区隔离）
+- **关闭即删除**：**所有智能体配置收拢在项目根目录 `.deepseek/agents.json`**
+  （以创建时的会话工作目录为项目根，子目录智能体也写回根目录）。**只有存活
+  的智能体会写入配置**——关闭 / 退出的智能体立即从配置删除，重启后不会以
+  「恢复」形式复活；只有「上次在跑、重启后却拉起失败」（如引擎未安装）的
+  智能体才显示为「已保存·未运行」卡片，可 ⏻ 重试或 ✕ 删除记录。配置里
+  **不再保存 transcriptTail**（原始终端字节是乱码，对恢复毫无用处）
 - **新建智能体弹窗**：选择引擎（claude / opencode / codex，自动检测已安装项）、
   命名、**角色定义**（内置预设：数据库专家 / 设计专家 / 前端专家 / 测试专家 /
   代码审查专家 / 架构师，也可自定义）、**挂载技能**（`~/.agents/skills/*`）、
   工作目录 —— 角色与技能会作为开场简报注入该智能体
 - **DeepSeek 指挥工具**：`agent_open` / `agent_list` / `agent_read` /
   `agent_send` / `agent_signal` / `agent_close`，总指挥可开智能体、派活、收结果
+  （`agent_list` 只返回**当前工作区**的智能体）
 - **共享记忆协议**：开智能体时自动在工作目录播种
   `.deepseek/memory.md`（长期记忆）、`.deepseek/task-board.md`（任务进度）、
   `.deepseek/experience.md`（工作经验沉淀：结果 / 教训 / 踩坑 / 复用模式）、
@@ -60,6 +72,9 @@ bash install.sh            # 默认 profile: web
 4. 点击智能体行展开实时终端，直接和它对话
 5. 对 DeepSeek 说："用 agent_open 打开一个 opencode，角色定为前端专家，
    派它修复 xx 页面的样式问题"，DeepSeek 会按 `agent-commander` skill 指挥团队
+6. **切换工作区（新会话/换目录）时，雷达会自动重新检测新文件夹的智能体列表**：
+   恢复 `.deepseek/agents.json` 中保存的未运行智能体、列出「已保存·未运行」的
+   已退出智能体（可点 ⏻ 恢复）；↻ 按钮可随时手动重新检测
 
 ## 开发
 
@@ -122,6 +137,8 @@ export function apply(ctx: Context) {
 | `approve(id, choice)` | 点击确认弹窗（默认选 1=Yes） |
 | `signal(id, sig)` / `close(id, graceful)` | 信号 / 关闭（graceful 先 /exit） |
 | `memory.query/add/list` | SQLite 记忆层读写 |
+| `scan(cwd)` | 重新检测某工作区的智能体（恢复其中已保存的未运行智能体，并清理已关闭/已退出的记录） |
+| `restore(id, cwd)` / `forget(id, cwd)` | 恢复某条保存记录 / 删除某条保存记录 |
 
 ## 说明与限制
 

@@ -22,7 +22,7 @@ if (typeof document !== "undefined" && document.querySelector("style[data-plugin
 //#endregion
 
 //#region dsh-agent-commander css: dsh-agent-commander/panel.css
-const panelCss = "/* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */\n.dhac_toggleCluster {\n\tz-index: 2147483646;\n\tposition: fixed;\n\ttop: 10px;\n\tright: 12px;\n\tdisplay: flex;\n\tflex-direction: row;\n\tgap: 4px;\n\ttransition: right 0.18s var(--ds-ease-in-out, ease);\n}\n/* Desktop app: sit below the native title-bar strip so the button stays\n   clickable (the strip is a window drag region, not a button surface). */\nhtml[data-dsh-desktop=\"true\"] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-desktop-titlebar-inset, 40px) + 8px);\n}\nbody[data-dsh-title-bar-compat] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-title-bar-strip, 40px) + 8px);\n}\n.dhac_toggleButton {\n\t-webkit-app-region: no-drag;\n\theight: 32px;\n\tpadding: 0 12px;\n\tgap: 6px;\n\tcolor: var(--dsw-alias-label-secondary, #aaa);\n\tcursor: pointer;\n\tbackground: var(--dsw-alias-bg-layer-1, #222);\n\tborder: 1px solid var(--dsw-alias-border-l2, #555);\n\tborder-radius: 999px;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tbox-shadow: 0 2px 10px rgba(0,0,0,0.35);\n\ttransition: background 0.15s, color 0.15s, transform 0.1s, border-radius 0.18s, width 0.18s;\n}\n.dhac_toggleIcon {\n\tfont-size: 15px;\n\tline-height: 1;\n}\n.dhac_toggleLabel {\n\twhite-space: nowrap;\n}\n.dhac_toggleButton:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover, #333);\n\tcolor: var(--dsw-alias-label-primary, #fff);\n\ttransform: scale(1.05);\n}\n.dhac_toggleButton:active {\n\ttransform: scale(0.95);\n}\n/* Panel open: compact icon-only circle docked to the details-column edge. */\n.dhac_toggleCluster_open .dhac_toggleButton {\n\twidth: 32px;\n\tpadding: 0;\n\tborder-radius: 50%;\n}\n.dhac_toggleCluster_open .dhac_toggleLabel {\n\tdisplay: none;\n}\n.dhac_root {\n\theight: 100%;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_header {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tmin-height: 38px;\n\tpadding: 0 8px 0 12px;\n\tdisplay: flex;\n}\n.dhac_headerTitle {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xs-strong-13);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_count {\n\tmin-width: 18px;\n\theight: 16px;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-secondary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 8px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tpadding: 0 5px;\n}\n.dhac_iconButton {\n\twidth: 26px;\n\theight: 26px;\n\tcolor: var(--dsw-alias-label-secondary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 14px;\n}\n.dhac_iconButton:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_iconButton:disabled {\n\topacity: 0.4;\n\tcursor: default;\n}\n.dhac_addButton {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\theight: 24px;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 0 10px;\n\tdisplay: inline-flex;\n}\n.dhac_addButton:hover {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_body {\n\tflex: 1;\n\tmin-height: 0;\n\toverflow-y: auto;\n\tpadding: 4px 6px 8px;\n}\n.dhac_empty {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\ttext-align: center;\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 120px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n}\n.dhac_emptyHint {\n\topacity: 0.85;\n}\n.dhac_agent {\n\tborder: 1px solid transparent;\n\tcursor: pointer;\n\ttext-align: left;\n\tbackground: none;\n\twidth: 100%;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\talign-items: stretch;\n\tgap: 2px;\n\tmargin: 2px 0;\n\tpadding: 6px 8px;\n\tdisplay: flex;\n}\n.dhac_agent:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_agentActive {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tborder-color: var(--dsw-alias-border-l1);\n}\n.dhac_agentTop {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tdisplay: flex;\n}\n.dhac_statusDot {\n\tborder-radius: 50%;\n\tflex: none;\n\twidth: 7px;\n\theight: 7px;\n}\n.dhac_statusDot[data-status=\"working\"] {\n\tbackground: var(--dsw-alias-state-warn-primary);\n\tbox-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);\n\tanimation: dhacPulse 1.6s ease-in-out infinite;\n}\n.dhac_statusDot[data-status=\"idle\"] {\n\tbackground: var(--dsw-alias-state-success-primary);\n}\n.dhac_statusDot[data-status=\"blocked\"] {\n\tbackground: var(--dsw-alias-state-error-primary);\n}\n.dhac_statusDot[data-status=\"exited\"] {\n\tbackground: var(--dsw-alias-label-tertiary);\n}\n@keyframes dhacPulse {\n\t50% {\n\t\topacity: 0.35;\n\t}\n}\n.dhac_agentName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_agentType {\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 4px;\n\tflex: none;\n\tpadding: 1px 5px;\n}\n.dhac_agentRole {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\twhite-space: nowrap;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding-left: 13px;\n}\n.dhac_agentMeta {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tpadding-left: 13px;\n}\n.dhac_toolbar {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 36px;\n\tpadding: 0 8px;\n\tdisplay: flex;\n}\n.dhac_toolbarName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_terminalWrap {\n\tflex: 1;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_terminal {\n\tflex: 1;\n\tmin-height: 0;\n\tpadding: 6px 4px 6px 8px;\n}\n.dhac_terminal .xterm {\n\theight: 100%;\n}\n.dhac_terminalBanner {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tpadding: 2px 10px;\n\tdisplay: flex;\n}\n.dhac_modal {\n\tposition: fixed;\n\tinset: 0;\n\tz-index: 1000;\n\tbackground: rgb(0 0 0 / 45%);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_dialog {\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv3);\n\twidth: min(440px, calc(100vw - 48px));\n\tmax-height: calc(100vh - 96px);\n\tborder-radius: 12px;\n\tflex-direction: column;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_dialogTitle {\n\tfont: var(--dsw-font-s-strong-14);\n\tcolor: var(--dsw-alias-label-primary);\n\tflex: none;\n\tpadding: 14px 16px 8px;\n}\n.dhac_dialogBody {\n\tflex: 1;\n\tmin-height: 0;\n\tgap: 10px;\n\toverflow-y: auto;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 4px 16px 12px;\n}\n.dhac_field {\n\tflex-direction: column;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_fieldLabel {\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-secondary);\n}\n.dhac_input,\n.dhac_textarea,\n.dhac_select {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\twidth: 100%;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-12);\n\tborder-radius: 6px;\n\tpadding: 6px 8px;\n\tbox-sizing: border-box;\n}\n.dhac_input:focus,\n.dhac_textarea:focus,\n.dhac_select:focus {\n\tborder-color: var(--dsw-alias-border-l2);\n\toutline: none;\n}\n.dhac_textarea {\n\tmin-height: 64px;\n\tresize: vertical;\n\tline-height: 1.5;\n}\n.dhac_presets {\n\tflex-wrap: wrap;\n\talign-items: center;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_preset {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 999px;\n\tflex: none;\n\tpadding: 2px 8px;\n}\n.dhac_preset:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_skills {\n\tflex-wrap: wrap;\n\tgap: 4px;\n\tmax-height: 96px;\n\talign-items: center;\n\toverflow-y: auto;\n\tdisplay: flex;\n}\n.dhac_skill {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 2px 8px;\n\tdisplay: inline-flex;\n}\n.dhac_skillSelected {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tcolor: var(--dsw-alias-label-primary);\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_skill input {\n\taccent-color: var(--dsw-alias-brand-primary);\n\tmargin: 0;\n}\n.dhac_dialogActions {\n\tborder-top: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tjustify-content: flex-end;\n\tpadding: 10px 16px;\n\tdisplay: flex;\n}\n.dhac_btn {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\theight: 28px;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\tpadding: 0 14px;\n}\n.dhac_btn:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_btn:disabled {\n\topacity: 0.45;\n\tcursor: default;\n}\n.dhac_btnPrimary {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\tborder-color: transparent;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n}\n.dhac_btnPrimary:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_error {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-state-error-primary);\n}\n.dhac_hint {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tline-height: 1.5;\n}\n\n/* ---- live terminal cards ---- */\n.dhac_cards {\n\tflex-direction: column;\n\tgap: 8px;\n\tdisplay: flex;\n}\n.dhac_card {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tcursor: pointer;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tmin-width: 0;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_card:hover {\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_cardHeader {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tflex: none;\n\tpadding: 4px 6px 4px 8px;\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tdisplay: flex;\n}\n.dhac_cardClose {\n\twidth: 20px;\n\theight: 20px;\n\tcolor: var(--dsw-alias-label-tertiary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 4px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 11px;\n}\n.dhac_cardClose:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_miniTermWrap {\n\theight: 148px;\n\tflex: none;\n\tpadding: 2px 4px 2px 6px;\n\tposition: relative;\n}\n.dhac_miniTerm {\n\twidth: 100%;\n\theight: 100%;\n}\n.dhac_miniTerm .xterm {\n\theight: 100%;\n}\n.dhac_cardExited {\n\theight: 148px;\n\tflex: none;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n\n/* ---- resize handle + status toasts ---- */\n.dhac_resizeHandle {\n\tcursor: col-resize;\n\ttouch-action: none;\n\tz-index: 3;\n\twidth: 8px;\n\tposition: absolute;\n\ttop: 0;\n\tbottom: 0;\n\tleft: -4px;\n}\n.dhac_resizeHandle:hover,\n.dhac_resizeHandle:active {\n\tbackground: var(--dsw-alias-interactive-bg-hover-accent);\n}\n.dhac_toasts {\n\tz-index: 30;\n\tpointer-events: none;\n\tgap: 6px;\n\tflex-direction: column;\n\talign-items: center;\n\tdisplay: flex;\n\tposition: absolute;\n\tbottom: 12px;\n\tleft: 8px;\n\tright: 8px;\n}\n.dhac_toast {\n\tpointer-events: auto;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-primary);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv1);\n\tmax-width: 100%;\n\tborder-radius: 8px;\n\tpadding: 6px 10px;\n\twhite-space: normal;\n}\n.dhac_toast_done {\n\tborder-color: var(--dsw-alias-state-success-primary);\n}\n.dhac_toast_exit {\n\tborder-color: var(--dsw-alias-label-tertiary);\n}\n.dhac_toast_create {\n\tborder-color: var(--dsw-alias-state-business-primary);\n}\n\n/* ---- cache dialog ---- */\n.dhac_cacheRow {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tgap: 2px;\n\tpadding: 8px 10px;\n\tdisplay: flex;\n}\n.dhac_cachePaths {\n\tflex-direction: column;\n\tgap: 1px;\n\tdisplay: flex;\n}\n.dhac_cachePath {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tword-break: break-all;\n}\n";
+const panelCss = "/* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */\n.dhac_toggleCluster {\n\tz-index: 2147483646;\n\tposition: fixed;\n\ttop: 10px;\n\tright: 12px;\n\tdisplay: flex;\n\tflex-direction: row;\n\tgap: 4px;\n\ttransition: right 0.18s var(--ds-ease-in-out, ease);\n}\n/* Desktop app: sit below the native title-bar strip so the button stays\n   clickable (the strip is a window drag region, not a button surface). */\nhtml[data-dsh-desktop=\"true\"] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-desktop-titlebar-inset, 40px) + 8px);\n}\nbody[data-dsh-title-bar-compat] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-title-bar-strip, 40px) + 8px);\n}\n.dhac_toggleButton {\n\t-webkit-app-region: no-drag;\n\theight: 32px;\n\tpadding: 0 12px;\n\tgap: 6px;\n\tcolor: var(--dsw-alias-label-secondary, #aaa);\n\tcursor: pointer;\n\tbackground: var(--dsw-alias-bg-layer-1, #222);\n\tborder: 1px solid var(--dsw-alias-border-l2, #555);\n\tborder-radius: 999px;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tbox-shadow: 0 2px 10px rgba(0,0,0,0.35);\n\ttransition: background 0.15s, color 0.15s, transform 0.1s, border-radius 0.18s, width 0.18s;\n}\n.dhac_toggleIcon {\n\tfont-size: 15px;\n\tline-height: 1;\n}\n.dhac_toggleLabel {\n\twhite-space: nowrap;\n}\n.dhac_toggleButton:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover, #333);\n\tcolor: var(--dsw-alias-label-primary, #fff);\n\ttransform: scale(1.05);\n}\n.dhac_toggleButton:active {\n\ttransform: scale(0.95);\n}\n/* Panel open: compact icon-only circle docked to the details-column edge. */\n.dhac_toggleCluster_open .dhac_toggleButton {\n\twidth: 32px;\n\tpadding: 0;\n\tborder-radius: 50%;\n}\n.dhac_toggleCluster_open .dhac_toggleLabel {\n\tdisplay: none;\n}\n.dhac_root {\n\theight: 100%;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_header {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tmin-height: 38px;\n\tpadding: 0 8px 0 12px;\n\tdisplay: flex;\n}\n.dhac_headerTitle {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xs-strong-13);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_workspace {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-secondary);\n\twhite-space: nowrap;\n\tflex: none;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding: 3px 12px 5px;\n\tcursor: default;\n}\n.dhac_count {\n\tmin-width: 18px;\n\theight: 16px;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-secondary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 8px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tpadding: 0 5px;\n}\n.dhac_iconButton {\n\twidth: 26px;\n\theight: 26px;\n\tcolor: var(--dsw-alias-label-secondary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 14px;\n}\n.dhac_iconButton:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_iconButton:disabled {\n\topacity: 0.4;\n\tcursor: default;\n}\n.dhac_addButton {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\theight: 24px;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 0 10px;\n\tdisplay: inline-flex;\n}\n.dhac_addButton:hover {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_body {\n\tflex: 1;\n\tmin-height: 0;\n\toverflow-y: auto;\n\tpadding: 4px 6px 8px;\n}\n.dhac_empty {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\ttext-align: center;\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 120px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n}\n.dhac_emptyHint {\n\topacity: 0.85;\n}\n.dhac_agent {\n\tborder: 1px solid transparent;\n\tcursor: pointer;\n\ttext-align: left;\n\tbackground: none;\n\twidth: 100%;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\talign-items: stretch;\n\tgap: 2px;\n\tmargin: 2px 0;\n\tpadding: 6px 8px;\n\tdisplay: flex;\n}\n.dhac_agent:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_agentActive {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tborder-color: var(--dsw-alias-border-l1);\n}\n.dhac_agentTop {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tdisplay: flex;\n}\n.dhac_statusDot {\n\tborder-radius: 50%;\n\tflex: none;\n\twidth: 7px;\n\theight: 7px;\n}\n.dhac_statusDot[data-status=\"working\"] {\n\tbackground: var(--dsw-alias-state-warn-primary);\n\tbox-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);\n\tanimation: dhacPulse 1.6s ease-in-out infinite;\n}\n.dhac_statusDot[data-status=\"idle\"] {\n\tbackground: var(--dsw-alias-state-success-primary);\n}\n.dhac_statusDot[data-status=\"blocked\"] {\n\tbackground: var(--dsw-alias-state-error-primary);\n}\n.dhac_statusDot[data-status=\"exited\"] {\n\tbackground: var(--dsw-alias-label-tertiary);\n}\n@keyframes dhacPulse {\n\t50% {\n\t\topacity: 0.35;\n\t}\n}\n.dhac_agentName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_agentType {\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 4px;\n\tflex: none;\n\tpadding: 1px 5px;\n}\n.dhac_agentRole {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\twhite-space: nowrap;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding-left: 13px;\n}\n.dhac_agentMeta {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tpadding-left: 13px;\n}\n.dhac_toolbar {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 36px;\n\tpadding: 0 8px;\n\tdisplay: flex;\n}\n.dhac_toolbarName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_terminalWrap {\n\tflex: 1;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_terminal {\n\tflex: 1;\n\tmin-height: 0;\n\tpadding: 6px 4px 6px 8px;\n}\n.dhac_terminal .xterm {\n\theight: 100%;\n}\n.dhac_terminalBanner {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tpadding: 2px 10px;\n\tdisplay: flex;\n}\n.dhac_modal {\n\tposition: fixed;\n\tinset: 0;\n\tz-index: 1000;\n\tbackground: rgb(0 0 0 / 45%);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_dialog {\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv3);\n\twidth: min(440px, calc(100vw - 48px));\n\tmax-height: calc(100vh - 96px);\n\tborder-radius: 12px;\n\tflex-direction: column;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_dialogTitle {\n\tfont: var(--dsw-font-s-strong-14);\n\tcolor: var(--dsw-alias-label-primary);\n\tflex: none;\n\tpadding: 14px 16px 8px;\n}\n.dhac_dialogBody {\n\tflex: 1;\n\tmin-height: 0;\n\tgap: 10px;\n\toverflow-y: auto;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 4px 16px 12px;\n}\n.dhac_field {\n\tflex-direction: column;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_fieldLabel {\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-secondary);\n}\n.dhac_input,\n.dhac_textarea,\n.dhac_select {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\twidth: 100%;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-12);\n\tborder-radius: 6px;\n\tpadding: 6px 8px;\n\tbox-sizing: border-box;\n}\n.dhac_input:focus,\n.dhac_textarea:focus,\n.dhac_select:focus {\n\tborder-color: var(--dsw-alias-border-l2);\n\toutline: none;\n}\n.dhac_textarea {\n\tmin-height: 64px;\n\tresize: vertical;\n\tline-height: 1.5;\n}\n.dhac_presets {\n\tflex-wrap: wrap;\n\talign-items: center;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_preset {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 999px;\n\tflex: none;\n\tpadding: 2px 8px;\n}\n.dhac_preset:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_skills {\n\tflex-wrap: wrap;\n\tgap: 4px;\n\tmax-height: 96px;\n\talign-items: center;\n\toverflow-y: auto;\n\tdisplay: flex;\n}\n.dhac_skill {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 2px 8px;\n\tdisplay: inline-flex;\n}\n.dhac_skillSelected {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tcolor: var(--dsw-alias-label-primary);\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_skill input {\n\taccent-color: var(--dsw-alias-brand-primary);\n\tmargin: 0;\n}\n.dhac_dialogActions {\n\tborder-top: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tjustify-content: flex-end;\n\tpadding: 10px 16px;\n\tdisplay: flex;\n}\n.dhac_btn {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\theight: 28px;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\tpadding: 0 14px;\n}\n.dhac_btn:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_btn:disabled {\n\topacity: 0.45;\n\tcursor: default;\n}\n.dhac_btnPrimary {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\tborder-color: transparent;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n}\n.dhac_btnPrimary:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_error {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-state-error-primary);\n}\n.dhac_hint {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tline-height: 1.5;\n}\n\n/* ---- live terminal cards ---- */\n.dhac_cards {\n\tflex-direction: column;\n\tgap: 8px;\n\tdisplay: flex;\n}\n.dhac_card {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tcursor: pointer;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tmin-width: 0;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_card:hover {\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_cardHeader {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tflex: none;\n\tpadding: 4px 6px 4px 8px;\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tdisplay: flex;\n}\n.dhac_cardClose {\n\twidth: 20px;\n\theight: 20px;\n\tcolor: var(--dsw-alias-label-tertiary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 4px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 11px;\n}\n.dhac_cardClose:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_miniTermWrap {\n\theight: 148px;\n\tflex: none;\n\tpadding: 2px 4px 2px 6px;\n\tposition: relative;\n}\n.dhac_miniTerm {\n\twidth: 100%;\n\theight: 100%;\n}\n.dhac_miniTerm .xterm {\n\theight: 100%;\n}\n.dhac_cardExited {\n\theight: 148px;\n\tflex: none;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_terminalDead {\n\tflex: 1;\n\tmin-height: 0;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 8px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n\ttext-align: center;\n}\n.dhac_terminalDeadHint {\n\topacity: 0.85;\n}\n\n/* ---- resize handle + status toasts ---- */\n.dhac_resizeHandle {\n\tcursor: col-resize;\n\ttouch-action: none;\n\tz-index: 3;\n\twidth: 8px;\n\tposition: absolute;\n\ttop: 0;\n\tbottom: 0;\n\tleft: -4px;\n}\n.dhac_resizeHandle:hover,\n.dhac_resizeHandle:active {\n\tbackground: var(--dsw-alias-interactive-bg-hover-accent);\n}\n.dhac_toasts {\n\tz-index: 30;\n\tpointer-events: none;\n\tgap: 6px;\n\tflex-direction: column;\n\talign-items: center;\n\tdisplay: flex;\n\tposition: absolute;\n\tbottom: 12px;\n\tleft: 8px;\n\tright: 8px;\n}\n.dhac_toast {\n\tpointer-events: auto;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-primary);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv1);\n\tmax-width: 100%;\n\tborder-radius: 8px;\n\tpadding: 6px 10px;\n\twhite-space: normal;\n}\n.dhac_toast_done {\n\tborder-color: var(--dsw-alias-state-success-primary);\n}\n.dhac_toast_exit {\n\tborder-color: var(--dsw-alias-label-tertiary);\n}\n.dhac_toast_create {\n\tborder-color: var(--dsw-alias-state-business-primary);\n}\n\n/* ---- cache dialog ---- */\n.dhac_cacheRow {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tgap: 2px;\n\tpadding: 8px 10px;\n\tdisplay: flex;\n}\n.dhac_cachePaths {\n\tflex-direction: column;\n\tgap: 1px;\n\tdisplay: flex;\n}\n.dhac_cachePath {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tword-break: break-all;\n}\n";
 const panelCssTagId = "dsh-agent-commander/panel.css";
 if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(panelCssTagId) + "]") === null) {
 	const tag = document.createElement("style");
@@ -7335,6 +7335,7 @@ function wsUrl(path) {
 const agentListeners = new Set();
 let agentSnapshot = [];
 let listWs = null;
+let listCwd = void 0;
 function setAgents(next) {
 	agentSnapshot = Array.isArray(next) ? next : [];
 	for (const fn of [...agentListeners]) fn(agentSnapshot);
@@ -7349,12 +7350,28 @@ function subscribeAgents(fn) {
 		agentListeners.delete(fn);
 	};
 }
+/** Scope the pushed agent list to a workspace folder and reconnect the WS.
+ * Called whenever the current session's working directory changes, so the
+ * radar only ever shows (and live-updates) THIS folder's agents. */
+function setListCwd(cwd) {
+	const next = typeof cwd === "string" && cwd !== "" ? cwd : void 0;
+	if (next === listCwd) return;
+	listCwd = next;
+	if (listWs !== null) {
+		try {
+			listWs.close();
+		} catch {}
+		listWs = null;
+	}
+	connectListWs();
+}
 function connectListWs() {
 	if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) return;
 	let ws;
 	const open = () => {
 		if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) return;
-		ws = new WebSocket(wsUrl("/agent-commander/ws/list"));
+		const qs = listCwd !== void 0 ? `?cwd=${encodeURIComponent(listCwd)}` : "";
+		ws = new WebSocket(wsUrl(`/agent-commander/ws/list${qs}`));
 		listWs = ws;
 		ws.onmessage = (e) => {
 			try {
@@ -7869,76 +7886,112 @@ function MiniTerminal({ agentId }) {
 // ---------------------------------------------------------------------------
 // Agent cards (live mini-terminal per agent)
 // ---------------------------------------------------------------------------
-function AgentCards({ agents, onOpen, onCompact, onNewSession, onCloseAgent }) {
+function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
 	if (agents.length === 0) {
 		return h("div", { className: "dhac_empty" }, [
-			h("div", null, "还没有智能体"),
+			h("div", null, scoped ? "本文件夹还没有智能体" : "还没有智能体"),
 			h("div", { className: "dhac_emptyHint" }, "点击右上角「＋ 新建」打开 claude / opencode / codex，或让 DeepSeek 用 agent_open 工具创建"),
 			h("div", { className: "dhac_emptyHint" }, "智能体共享记忆：.deepseek/memory.md · task-board.md · experience.md · handoffs/")
 		]);
 	}
-	return h("div", { className: "dhac_cards" }, agents.map((agent) =>
-		h("div", {
+	return h("div", { className: "dhac_cards" }, agents.map((agent) => {
+		const ghost = agent.running === false;
+		return h("div", {
 			key: agent.id,
 			className: "dhac_card",
 			onClick: () => onOpen(agent)
 		}, [
 			h("div", { className: "dhac_cardHeader" }, [
-				h("span", { className: "dhac_statusDot", "data-status": agent.status }),
+				h("span", { className: "dhac_statusDot", "data-status": ghost ? "exited" : agent.status }),
 				h("span", { className: "dhac_agentName", title: agent.role || agent.cwd }, agent.name),
 				h("span", { className: "dhac_agentType" }, agent.type),
-				h("span", { className: "dhac_agentMeta" }, STATUS_LABEL[agent.status] ?? agent.status),
-				COMPACT_SUPPORTED.has(agent.type) && h("button", {
-					type: "button",
-					className: "dhac_cardClose",
-					title: "压缩会话（减少上下文）",
-					onClick: (e) => {
-						e.stopPropagation();
-						onCompact(agent.id);
-					}
-				}, "🗜"),
-				h("button", {
-					type: "button",
-					className: "dhac_cardClose",
-					title: "清空会话历史",
-					onClick: (e) => {
-						e.stopPropagation();
-						onNewSession(agent.id);
-					}
-				}, "↺"),
-				h("button", {
-					type: "button",
-					className: "dhac_cardClose",
-					title: "关闭智能体",
-					onClick: (e) => {
-						e.stopPropagation();
-						onCloseAgent(agent.id);
-					}
-				}, "✕")
+				h("span", { className: "dhac_agentMeta" }, ghost ? "已保存·未运行" : (STATUS_LABEL[agent.status] ?? agent.status)),
+				ghost
+					? h("span", { style: { display: "contents" } }, [
+						h("button", {
+							type: "button",
+							className: "dhac_cardClose",
+							title: "重新启动该智能体（恢复会话）",
+							onClick: (e) => {
+								e.stopPropagation();
+								onRestore(agent.id);
+							}
+						}, "⏻"),
+						h("button", {
+							type: "button",
+							className: "dhac_cardClose",
+							title: "删除该保存记录（从 .deepseek/agents.json 移除）",
+							onClick: (e) => {
+								e.stopPropagation();
+								onForget(agent.id);
+							}
+						}, "✕")
+					])
+					: h("span", { style: { display: "contents" } }, [
+						COMPACT_SUPPORTED.has(agent.type) && h("button", {
+							type: "button",
+							className: "dhac_cardClose",
+							title: "压缩会话（减少上下文）",
+							onClick: (e) => {
+								e.stopPropagation();
+								onCompact(agent.id);
+							}
+						}, "🗜"),
+						h("button", {
+							type: "button",
+							className: "dhac_cardClose",
+							title: "清空会话历史",
+							onClick: (e) => {
+								e.stopPropagation();
+								onNewSession(agent.id);
+							}
+						}, "↺"),
+						h("button", {
+							type: "button",
+							className: "dhac_cardClose",
+							title: "关闭智能体",
+							onClick: (e) => {
+								e.stopPropagation();
+								onCloseAgent(agent.id);
+							}
+						}, "✕")
+					])
 			]),
 			agent.role !== "" && h("div", { className: "dhac_agentRole", title: agent.role }, agent.role),
 			h("div", { className: "dhac_agentMeta", title: `${agent.cwd} · 会话 ${agent.sessionName ?? agent.sessionId ?? "-"}` },
 				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.restored ? " · 已恢复" : ""}`),
-			agent.exited
-				? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
-				: h("div", { className: "dhac_miniTermWrap" }, h(MiniTerminal, { agentId: agent.id }))
-		])
-	));
+			ghost
+				? h("div", { className: "dhac_cardExited" }, `未运行（恢复失败或已关闭）— ⏻ 恢复 / ✕ 删除记录`)
+				: (agent.exited
+					? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
+					: h("div", { className: "dhac_miniTermWrap" }, h(MiniTerminal, { agentId: agent.id })))
+		]);
+	}));
 }
 
-function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent }) {
+function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
 	const signalRef = useRef(null);
+	const ghost = agent.running === false;
 	return h("div", { className: "dhac_root" }, [
 		h("div", { className: "dhac_toolbar" }, [
 			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, "‹"),
 			h("span", { className: "dhac_toolbarName", title: `${agent.name} · ${agent.cwd}` }, `${agent.name} (${agent.type})`),
-			h("span", { className: "dhac_agentMeta" }, STATUS_LABEL[agent.status] ?? agent.status),
-			COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, "🗜"),
-			h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, "↺"),
-			h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, "⏹"),
-			h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, "✕")
+			h("span", { className: "dhac_agentMeta" }, ghost ? "已保存·未运行" : (STATUS_LABEL[agent.status] ?? agent.status)),
+			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "重新启动该智能体（恢复会话）", onClick: () => onRestore(agent.id) }, "⏻"),
+			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, "✕"),
+			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, "🗜"),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, "↺"),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, "⏹"),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, "✕")
 		]),
-		h(AgentTerminal, { agentId: agent.id, signalRef })
+		ghost
+			? h("div", { className: "dhac_terminalDead" }, [
+				h("div", null, "该智能体记录保存在本工作区的 .deepseek/agents.json 中，但进程未运行（恢复失败或已关闭）。"),
+				h("div", { className: "dhac_terminalDeadHint" }, "点「⏻ 恢复」重新启动；点「✕」删除该记录。")
+			])
+			: (agent.exited
+				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
+				: h(AgentTerminal, { agentId: agent.id, signalRef }))
 	]);
 }
 
@@ -7987,6 +8040,9 @@ function RadarPanel(props) {
 	const [detailId, setDetailId] = useState(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [toasts, setToasts] = useState([]);
+	const [workspaceCwd, setWorkspaceCwd] = useState(void 0);
+	const [savedGhosts, setSavedGhosts] = useState([]);
+	const [scanning, setScanning] = useState(false);
 	const { rootRef, onDragStart } = useDetailsColumn();
 	const sessionId = props.sessionId;
 	const sessionCwd = typeof props.useSessions === "function"
@@ -7999,46 +8055,80 @@ function RadarPanel(props) {
 		? props.useWorkspaces((s) => (sessionId !== void 0 ? s.items?.find((w) => w.sessionIds?.includes(sessionId))?.workspaceId : void 0))
 		: void 0;
 
-	// Status notifications: diff the pushed list and toast meaningful transitions.
+	const pushToast = useCallback((text, kind) => {
+		const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+		setToasts((list) => [...list.slice(-4), { id, text, kind }]);
+		setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), 6000);
+	}, []);
+
+	// 重新检测：向服务端扫描本文件夹 .deepseek/agents.json（恢复未运行的
+	// 已保存智能体、返回“已保存未运行”的幽灵记录），并拉取本文件夹的智能体列表。
+	const reDetect = useCallback((cwd) => {
+		if (typeof cwd === "string" && cwd !== "") {
+			setScanning(true);
+			apiPost("/agents/scan", { cwd }).then((value) => {
+				setAgents(value?.agents ?? []);
+				setSavedGhosts(value?.saved ?? []);
+				if (Number(value?.restored ?? 0) > 0) pushToast(`重新检测：已恢复 ${value.restored} 个本文件夹的智能体`, "done");
+			}).catch(() => {
+				apiGet(`/agents?cwd=${encodeURIComponent(cwd)}`).then((v) => setAgents(v?.agents ?? [])).catch(() => {});
+			}).finally(() => setScanning(false));
+		} else {
+			setSavedGhosts([]);
+			apiGet("/agents").then((v) => setAgents(v?.agents ?? [])).catch(() => {});
+		}
+	}, [pushToast]);
+
+	// 每次切换工作区（会话工作目录变化）→ 重新检测本文件夹的智能体列表：
+	// 1) 列表 WS 按 cwd 重新连接（后续只推送本文件夹的智能体）
+	// 2) 扫描 .deepseek/agents.json 恢复/列出本文件夹的智能体
+	useEffect(() => {
+		const cwd = typeof sessionCwd === "string" && sessionCwd !== "" ? sessionCwd : void 0;
+		setWorkspaceCwd(cwd);
+		setListCwd(cwd);
+		reDetect(cwd);
+	}, [sessionCwd, reDetect]);
+
+	// Status notifications: diff the pushed list and toast meaningful
+	// transitions. The diff is reset whenever the workspace scope changes, so
+	// switching folders never toasts false "已关闭/已创建" for other folders.
 	const prevRef = useRef([]);
+	const prevCwdRef = useRef(void 0);
 	useEffect(() => {
 		connectListWs();
-		const pushToast = (text, kind) => {
-			const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-			setToasts((list) => [...list.slice(-4), { id, text, kind }]);
-			setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), 6000);
-		};
 		const unsub = subscribeAgents((next) => {
-			const prev = prevRef.current;
+			const cwdNow = listCwd;
+			const prev = prevCwdRef.current === cwdNow ? prevRef.current : [];
+			prevCwdRef.current = cwdNow;
 			prevRef.current = next;
-			const byId = new Map(prev.map((a) => [a.id, a]));
-			for (const agent of next) {
-				const old = byId.get(agent.id);
-				if (old === void 0) {
-					pushToast(`智能体 ${agent.name}（${agent.type}）已创建`, "create");
-				} else if (old.status === "working" && agent.status === "idle") {
-					pushToast(`智能体 ${agent.name} 已完成任务，回到空闲`, "done");
-				} else if (old.status !== "exited" && agent.status === "exited") {
-					pushToast(`智能体 ${agent.name} 已退出`, "exit");
+			if (prev.length > 0) {
+				const byId = new Map(prev.map((a) => [a.id, a]));
+				for (const agent of next) {
+					const old = byId.get(agent.id);
+					if (old === void 0) {
+						pushToast(`智能体 ${agent.name}（${agent.type}）已创建`, "create");
+					} else if (old.status === "working" && agent.status === "idle") {
+						pushToast(`智能体 ${agent.name} 已完成任务，回到空闲`, "done");
+					} else if (old.status !== "exited" && agent.status === "exited") {
+						pushToast(`智能体 ${agent.name} 已退出`, "exit");
+					}
 				}
-			}
-			for (const agent of prev) {
-				if (!next.some((a) => a.id === agent.id)) pushToast(`智能体 ${agent.name} 已关闭`, "exit");
+				for (const agent of prev) {
+					if (!next.some((a) => a.id === agent.id)) pushToast(`智能体 ${agent.name} 已关闭`, "exit");
+				}
 			}
 			setAgentsState(next);
 		});
 		return unsub;
-	}, []);
+	}, [pushToast]);
 
-	const detail = detailId === null ? void 0 : agents.find((a) => a.id === detailId);
+	const merged = savedGhosts.length > 0 ? [...agents, ...savedGhosts] : agents;
+	const detail = detailId === null ? void 0 : merged.find((a) => a.id === detailId);
 	const closeAgent = async (id) => {
 		try {
 			// graceful: ask the agent to /exit itself before the server escalates
 			await apiDelete(`/agents/${encodeURIComponent(id)}?graceful=1`);
 		} catch {}
-	};
-	const refresh = () => {
-		apiGet("/agents").then((value) => setAgents(value?.agents ?? [])).catch(() => {});
 	};
 	const newSession = async (id) => {
 		try {
@@ -8050,22 +8140,46 @@ function RadarPanel(props) {
 			await apiPost(`/agents/${encodeURIComponent(id)}/compact`, {});
 		} catch {}
 	};
+	const restoreSaved = async (id) => {
+		try {
+			const value = await apiPost(`/agents/${encodeURIComponent(id)}/restore`, { cwd: workspaceCwd, sessionId });
+			if (value?.agent) pushToast(`智能体 ${value.agent.name}（${value.agent.type}）已恢复`, "done");
+		} catch (err) {
+			pushToast(`恢复失败：${err instanceof Error ? err.message : String(err)}`, "exit");
+		}
+		reDetect(workspaceCwd);
+	};
+	const forgetSaved = async (id) => {
+		try {
+			const value = await apiPost(`/agents/${encodeURIComponent(id)}/forget`, { cwd: workspaceCwd, sessionId });
+			if (value?.removed) pushToast("已删除该智能体的保存记录", "done");
+			else pushToast("没有找到该保存记录", "exit");
+		} catch (err) {
+			pushToast(`删除失败：${err instanceof Error ? err.message : String(err)}`, "exit");
+		}
+		reDetect(workspaceCwd);
+	};
+	const workspaceLabel = workspaceCwd !== void 0
+		? (workspaceCwd.split("/").filter(Boolean).pop() || workspaceCwd)
+		: "全部工作区";
 
 	return h("div", { ref: rootRef, className: "dhac_root" }, [
 		h("div", { className: "dhac_resizeHandle", title: "拖拽调整宽度", onPointerDown: onDragStart }),
 		h("div", { className: "dhac_header" }, [
 			h("span", { className: "dhac_headerTitle" }, "智能体雷达"),
-			h("span", { className: "dhac_count" }, String(agents.length)),
-			h("button", { type: "button", className: "dhac_iconButton", title: "刷新", onClick: refresh }, "↻"),
+			h("span", { className: "dhac_count" }, String(merged.length)),
+			h("button", { type: "button", className: "dhac_iconButton", title: "重新检测本文件夹的智能体列表", onClick: () => reDetect(workspaceCwd), disabled: scanning }, scanning ? "…" : "↻"),
 			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, "＋ 新建")
 		]),
+		h("div", { className: "dhac_workspace", title: workspaceCwd ?? "未绑定工作区（显示全部智能体）" },
+			`📁 ${workspaceLabel}${scanning ? " · 检测中…" : ""}`),
 		h("div", { className: "dhac_toasts" },
 			toasts.map((t) =>
 				h("div", { key: t.id, className: `dhac_toast dhac_toast_${t.kind}` }, t.text))),
 		h("div", { className: "dhac_body" },
 			detail !== void 0
-				? h(TerminalDetail, { agent: detail, onBack: () => setDetailId(null), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent })
-				: h(AgentCards, { agents, onOpen: (agent) => setDetailId(agent.id), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent })),
+				? h(TerminalDetail, { agent: detail, onBack: () => setDetailId(null), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent, onRestore: restoreSaved, onForget: forgetSaved })
+				: h(AgentCards, { agents: merged, scoped: workspaceCwd !== void 0, onOpen: (agent) => setDetailId(agent.id), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent, onRestore: restoreSaved, onForget: forgetSaved })),
 		dialogOpen &&
 			h(NewAgentDialog, {
 				sessionId,
@@ -8073,7 +8187,7 @@ function RadarPanel(props) {
 				workspaceId,
 				defaultCwd: sessionCwd,
 				onClose: () => setDialogOpen(false),
-				onCreated: refresh
+				onCreated: () => reDetect(workspaceCwd)
 			})
 	]);
 }
@@ -8100,7 +8214,8 @@ function apply(ctx) {
 		// close/status + memory.list/search/add + onStatus(listener).
 		ctx.effect(() => {
 			const api = {
-				list: () => apiGet("/agents").then((v) => v?.agents ?? []),
+				list: (cwd) => apiGet(typeof cwd === "string" && cwd !== "" ? `/agents?cwd=${encodeURIComponent(cwd)}` : "/agents").then((v) => v?.agents ?? []),
+				scan: (cwd) => apiPost("/agents/scan", { cwd }).then((v) => v?.agents ?? []),
 				open: (opts) => apiPost("/agents", opts).then((v) => v?.agent),
 				send: (id, text, submit) => apiPost(`/agents/${encodeURIComponent(id)}/send`, { text, submit: submit === true }),
 				read: (id, bytes) => apiGet(`/agents/${encodeURIComponent(id)}/read?bytes=${Number.isFinite(bytes) ? bytes : 12000}`),
@@ -8110,6 +8225,8 @@ function apply(ctx) {
 				status: (id) => apiGet(`/agents/${encodeURIComponent(id)}/status`),
 				newSession: (id) => apiPost(`/agents/${encodeURIComponent(id)}/new-session`, {}),
 				compactSession: (id) => apiPost(`/agents/${encodeURIComponent(id)}/compact`, {}),
+				restore: (id, cwd) => apiPost(`/agents/${encodeURIComponent(id)}/restore`, { cwd }).then((v) => v?.agent),
+				forget: (id, cwd) => apiPost(`/agents/${encodeURIComponent(id)}/forget`, { cwd }).then((v) => v?.removed === true),
 				memory: {
 					list: (ns) => apiGet(`/memory${ns ? `?namespace=${encodeURIComponent(ns)}` : ""}`).then((v) => v?.entries ?? []),
 					search: (q) => apiGet(`/memory/search?q=${encodeURIComponent(q)}`).then((v) => v?.entries ?? []),

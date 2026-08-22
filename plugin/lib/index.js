@@ -647,14 +647,23 @@ function deriveStatus(transcript, current) {
 // Agent registry
 // ---------------------------------------------------------------------------
 var AgentRegistry = class {
-	constructor(nodePty, maxAgents, baseCwd, onSpawn) {
+	constructor(nodePty, maxAgents, baseCwd, onSpawn, projectRootOf) {
 		this.nodePty = nodePty;
 		this.maxAgents = maxAgents;
 		this.baseCwd = baseCwd ?? process.cwd();
 		this.onSpawn = typeof onSpawn === "function" ? onSpawn : null;
+		this.projectRootOf = typeof projectRootOf === "function" ? projectRootOf : null;
 		this.agents = new Map();
 		this.listeners = new Set();
 		this.statusTimer = null;
+		// True while restoreState/scanCwd are re-spawning saved agents: persist()
+		// must NOT delete the agents.json of a root it hasn't finished restoring
+		// yet (the file is the only record of those agents).
+		this.restoring = false;
+		// True during app teardown: the first persist() in shutdown() already
+		// wrote the live config, so the exit events fired by killing the PTYs
+		// must not make persist() delete that just-written config.
+		this.shuttingDown = false;
 	}
 	/** Debounced notify: status flips (idle↔working) are coalesced to one push per 1.5s. */
 	scheduleStatusNotify() {
@@ -788,6 +797,15 @@ var AgentRegistry = class {
 	}
 	list() {
 		return [...this.agents.values()].map((handle) => this.meta(handle));
+	}
+	/** Workspace-scoped view: agents whose working directory IS this folder or
+	 * lives under it. Used by the radar panel / agent_list after a workspace
+	 * switch, so each folder only sees its own agents. */
+	listByCwd(cwd) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		return [...this.agents.values()]
+			.filter((handle) => handle.cwd === target || handle.cwd.startsWith(target + sep()))
+			.map((handle) => this.meta(handle));
 	}
 	get(id) {
 		return this.agents.get(id);
@@ -1006,48 +1024,229 @@ var AgentRegistry = class {
 	}
 	/**
 	* Persist workspace config: each project root's `.deepseek/agents.json`
-	* records its open agents (count, session ids, cwd, pid, transcript tail),
-	* and a global index (~/.dsh/agent-commander/workspaces.json) remembers every
-	* known project so a restart can restore even before a session opens.
+	* records its open agents (count, session ids, cwd, pid), and a global index
+	* (~/.dsh/agent-commander/workspaces.json) remembers every known project so
+	* a restart can restore even before a session opens.
+	*
+	* Rules:
+	*   • ONLY live (non-exited) agents are written — closing/exiting an agent
+	*     deletes its record, so it never comes back as a "restore" after reboot.
+	*   • No transcript dumps (transcriptTail removed — raw terminal bytes are
+	*     garbage in JSON and useless for restore).
+	*   • All configs land in the PROJECT ROOT (the session working directory of
+	*     the agent that created them), not scattered per subfolder cwd.
+	*   • Workspaces whose agents are all gone get their agents.json deleted.
 	*/
 	persist() {
 		try {
-			const state = [...this.agents.values()].map((handle) => ({
-				...this.meta(handle),
-				transcriptTail: stripAnsi(handle.transcript.slice(-8000))
-			}));
-			// Group by project root and write one config per project.
+			const state = [...this.agents.values()]
+				.filter((handle) => !handle.exited)
+				.map((handle) => this.meta(handle));
+			// Group by project root (defaults to the session's working directory).
 			const byCwd = new Map();
 			for (const entry of state) {
-				const cwd = entry.cwd || this.baseCwd;
+				const cwd = this.projectRootOf !== null ? this.projectRootOf(entry) : (entry.cwd || this.baseCwd);
 				if (!byCwd.has(cwd)) byCwd.set(cwd, []);
 				byCwd.get(cwd).push(entry);
 			}
-			const known = new Set();
-			for (const [cwd, entries] of byCwd) {
-				known.add(cwd);
-				mkdirSync(join(cwd, MEMORY_DIR), { recursive: true });
-				writeFileSync(join(cwd, MEMORY_DIR, "agents.json"), JSON.stringify({ agents: entries }, null, 2), "utf8");
-			}
-			// Global workspace index for cross-session restore.
+			const indexFile = join(dshDataDir(), "workspaces.json");
+			let prev = [];
 			try {
-				const indexFile = join(dshDataDir(), "workspaces.json");
-				mkdirSync(dirname(indexFile), { recursive: true });
-				const prev = existsSync(indexFile) ? JSON.parse(readFileSync(indexFile, "utf8")) : [];
-				const merged = new Map((Array.isArray(prev) ? prev : []).map((w) => [w, w]));
-				for (const cwd of known) merged.set(cwd, cwd);
-				for (const cwd of [...merged.keys()]) {
-					if (!existsSync(join(cwd, MEMORY_DIR, "agents.json"))) merged.delete(cwd);
-				}
-				writeFileSync(indexFile, JSON.stringify([...merged.keys()], null, 2), "utf8");
+				prev = existsSync(indexFile) ? JSON.parse(readFileSync(indexFile, "utf8")) : [];
 			} catch {}
+			const prevRoots = Array.isArray(prev) ? [...new Set(prev)] : [];
+			// While restoring (restoreState/scanCwd re-spawning saved agents)
+			// the file writes are skipped entirely: the config files already
+			// hold the saved data, and rewriting them mid-loop would drop the
+			// not-yet-processed entries of the same root. The restore paths
+			// own the files and reconcile them when they finish.
+			if (!this.restoring) {
+				for (const [cwd, entries] of byCwd) {
+					mkdirSync(join(cwd, MEMORY_DIR), { recursive: true });
+					writeFileSync(join(cwd, MEMORY_DIR, "agents.json"), JSON.stringify({ agents: entries }, null, 2), "utf8");
+				}
+			}
+			// Cleanup: roots with no live agents in THIS registry no longer need
+			// a config. The registry is the source of truth — the file's own
+			// `exited` flags go stale the moment a closed agent stops being
+			// persisted (persist with an empty live set used to rewrite
+			// nothing, and the old hasLive check then read that stale file and
+			// kept it), which is exactly how closed agents resurrected on
+			// restart. Only explicitly-exited / no-longer-installable records
+			// are kept as "ghosts" (已保存·未运行 cards); the file is deleted
+			// when nothing worth keeping remains.
+			for (const cwd of prevRoots) {
+				if (byCwd.has(cwd)) continue;
+				if (this.restoring || this.shuttingDown) continue;
+				try {
+					const file = join(cwd, MEMORY_DIR, "agents.json");
+					if (!existsSync(file)) continue;
+					let saved = [];
+					try {
+						const parsed = JSON.parse(readFileSync(file, "utf8"));
+						const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+						if (Array.isArray(list)) saved = list;
+					} catch {}
+					const ghosts = saved.filter((e) => e != null && typeof e === "object"
+						&& (e.exited === true || !AGENT_TYPES.includes(e?.type) || resolveBinary(e?.type) === null));
+					if (ghosts.length === 0) unlinkSync(file);
+					else writeFileSync(file, JSON.stringify({ agents: ghosts }, null, 2), "utf8");
+				} catch {}
+			}
+			// Rebuild the global workspace index: keep only roots with a config.
+			const merged = new Set();
+			for (const cwd of [...prevRoots, ...byCwd.keys()]) {
+				if (existsSync(join(cwd, MEMORY_DIR, "agents.json"))) merged.add(cwd);
+			}
+			mkdirSync(dirname(indexFile), { recursive: true });
+			writeFileSync(indexFile, JSON.stringify([...merged], null, 2), "utf8");
 		} catch (error) {
 			console.warn("[dsh-agent-commander] persist failed:", error?.message ?? error);
 		}
 	}
+	/** Re-spawn one saved agent entry (from a folder's .deepseek/agents.json).
+	 * Shared by restoreState / scanCwd / restoreSaved. Returns the live handle,
+	 * the existing handle if it is already running, or null when the entry is
+	 * exited / malformed / cannot be spawned. */
+	spawnSaved(entry, fallbackCwd) {
+		if (entry == null || typeof entry !== "object") return null;
+		if (!AGENT_TYPES.includes(entry?.type)) return null;
+		if (entry.exited === true) return null;
+		const existing = this.agents.get(entry?.id);
+		if (existing !== void 0) return existing;
+		try {
+			return this.create({
+				type: entry.type,
+				name: entry.name,
+				role: entry.role,
+				skills: entry.skills,
+				cwd: entry.cwd ?? fallbackCwd,
+				cols: 80,
+				rows: 24,
+				id: entry.id,
+				sessionId: entry.sessionId,
+				sessionName: entry.sessionName,
+				workspaceId: entry.workspaceId,
+				restored: true
+			});
+		} catch (error) {
+			console.warn(`[dsh-agent-commander] spawn saved agent ${entry?.id ?? "?"} failed:`, error?.message ?? error);
+			return null;
+		}
+	}
+	/** Re-detect a folder's saved agent config (.deepseek/agents.json): restore
+	 * non-exited saved agents that are not running, and return the folder's live
+	 * agents plus ghost records for saved agents that could not be spawned. This
+	 * is what makes the radar list follow the workspace after every workspace
+	 * switch. Closed/exited agents are purged from the file here (self-heal), so
+	 * they never resurface as "restore" cards. */
+	scanCwd(cwd) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		const file = join(target, MEMORY_DIR, "agents.json");
+		let saved = [];
+		if (existsSync(file)) {
+			try {
+				const parsed = JSON.parse(readFileSync(file, "utf8"));
+				const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+				if (Array.isArray(list)) saved = list;
+			} catch {}
+		}
+		// Drop stale closed records left by the OLD persist (exited yet still
+		// spawnable — 关闭即删除 leftovers) and keep live records plus genuine
+		// ghosts (explicitly exited, or an engine that is no longer installed).
+		// Note: records with a stale `exited:false` flag can't be told apart
+		// from legitimately-saved agents here — persist() keeps the config
+		// accurate so such records never exist in the first place.
+		const kept = saved.filter((e) => e != null && typeof e === "object"
+			&& (e.exited !== true || !AGENT_TYPES.includes(e?.type) || resolveBinary(e?.type) === null));
+		let restored = 0;
+		const ghosts = [];
+		// Guard persist() (triggered by create() while spawning) against
+		// rewriting this folder's config mid-loop, which would drop the
+		// not-yet-processed saved entries. The config is reconciled below
+		// once the whole list has been processed.
+		this.restoring = true;
+		try {
+			for (const entry of kept) {
+				if (entry == null || typeof entry !== "object") continue;
+				if (!AGENT_TYPES.includes(entry?.type)) continue;
+				// Already running in this registry? Keep it, but don't count as
+				// "restored" — only newly spawned agents count. spawnSaved returns
+				// null when the entry cannot be spawned (never undefined).
+				const alreadyRunning = entry.id !== void 0 && this.agents.has(entry.id);
+				const handle = alreadyRunning ? this.agents.get(entry.id) : this.spawnSaved(entry, target);
+				if (handle !== null) {
+					if (!alreadyRunning) restored += 1;
+					continue;
+				}
+				// Saved but could not be spawned (engine no longer installed, …):
+				// keep it visible as "已保存·未运行" so the user can retry or forget it.
+				ghosts.push({ ...entry, running: false, status: "exited" });
+			}
+		} finally {
+			this.restoring = false;
+		}
+		// Reconcile the config: write back the kept records (live agents +
+		// ghosts), delete the file when nothing remains.
+		if (kept.length === 0) {
+			try { unlinkSync(file); } catch {}
+		} else {
+			try {
+				writeFileSync(file, JSON.stringify({ agents: kept }, null, 2), "utf8");
+			} catch {}
+		}
+		return { agents: this.listByCwd(target), saved: ghosts, restored };
+	}
+	/** Forget (delete) ONE saved agent record of a folder — the ghost ✕ button.
+	 * Removes the entry from the project root's agents.json (deletes the file
+	 * when it becomes empty). */
+	forgetSaved(cwd, id) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		const file = join(target, MEMORY_DIR, "agents.json");
+		if (!existsSync(file)) return { removed: false };
+		let saved = [];
+		try {
+			const parsed = JSON.parse(readFileSync(file, "utf8"));
+			const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+			if (Array.isArray(list)) saved = list;
+		} catch {
+			return { removed: false };
+		}
+		const next = saved.filter((e) => e == null || typeof e !== "object" || e.id !== id);
+		if (next.length === saved.length) return { removed: false };
+		try {
+			if (next.length === 0) unlinkSync(file);
+			else writeFileSync(file, JSON.stringify({ agents: next }, null, 2), "utf8");
+		} catch {
+			return { removed: false };
+		}
+		return { removed: true };
+	}
+	/** Re-spawn ONE saved agent of a folder (the ghost "恢复" button). */
+	restoreSaved(cwd, id) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		const existing = this.agents.get(id);
+		if (existing !== void 0) return this.meta(existing);
+		const file = join(target, MEMORY_DIR, "agents.json");
+		if (!existsSync(file)) throw new Error(`no saved agents config in "${target}"`);
+		let saved = [];
+		try {
+			const parsed = JSON.parse(readFileSync(file, "utf8"));
+			const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+			if (Array.isArray(list)) saved = list;
+		} catch {
+			throw new Error(`cannot read "${file}"`);
+		}
+		const entry = saved.find((e) => e != null && typeof e === "object" && e.id === id);
+		if (entry === void 0) throw new Error(`agent "${id}" not found in "${file}"`);
+		const handle = this.spawnSaved(entry, target);
+		if (handle === null) throw new Error(`agent "${id}" cannot be restored (type "${entry?.type ?? "?"}" not installed or exited)`);
+		return this.meta(handle);
+	}
 	/** Re-spawn every saved non-exited agent from ALL known workspaces, replaying transcript tails as context. */
 	restoreState() {
 		if (this.nodePty === null) return 0;
+		this.restoring = true;
 		let restored = 0;
 		try {
 			const indexFile = join(dshDataDir(), "workspaces.json");
@@ -1066,51 +1265,26 @@ var AgentRegistry = class {
 				const list = Array.isArray(state) ? state : state?.agents;
 				if (!Array.isArray(list)) continue;
 				for (const entry of list) {
-					if (entry?.exited === true) continue;
-					if (!AGENT_TYPES.includes(entry?.type)) continue;
+					if (entry == null || typeof entry !== "object") continue;
 					if (seen.has(entry?.id)) continue;
 					seen.add(entry?.id);
-					try {
-						const handle = this.create({
-							type: entry.type,
-							name: entry.name,
-							role: entry.role,
-							skills: entry.skills,
-							cwd: entry.cwd,
-							cols: 80,
-							rows: 24,
-							id: entry.id,
-							sessionId: entry.sessionId,
-							sessionName: entry.sessionName,
-							workspaceId: entry.workspaceId,
-							restored: true
-						});
-						if (typeof entry.transcriptTail === "string" && entry.transcriptTail !== "") {
-							setTimeout(() => {
-								try {
-									handle.pty.write(`[dsh-agent-commander] 这是你上次会话的末尾记录（恢复上下文）：\n${entry.transcriptTail.slice(-4000)}\n`);
-									setTimeout(() => {
-										try {
-											handle.pty.write("\r");
-										} catch {}
-									}, 250);
-								} catch {}
-							}, 3500);
-						}
-						restored += 1;
-					} catch (error) {
-						console.warn(`[dsh-agent-commander] restore agent ${entry?.id ?? "?"} failed:`, error?.message ?? error);
-					}
+					if (this.spawnSaved(entry, root) !== null) restored += 1;
 				}
 			}
 		} catch (error) {
 			console.warn("[dsh-agent-commander] restoreState failed:", error?.message ?? error);
+		} finally {
+			this.restoring = false;
 		}
 		if (restored > 0) console.info(`[dsh-agent-commander] restored ${restored} agent(s) from workspace configs`);
 		return restored;
 	}
 	/** App shutdown: save live state for the next boot, then kill every PTY. */
 	shutdown() {
+		// shuttingDown guards persist() against the exit events that killing
+		// the PTYs triggers: the first persist below already captured the live
+		// config, and the post-kill onExit persists must not delete it.
+		this.shuttingDown = true;
 		this.persist();
 		for (const handle of this.agents.values()) {
 			try {
@@ -1263,7 +1437,7 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 	}));
 	register(defineTool({
 		name: "agent_list",
-		description: "List every team agent currently open in the Agent Radar. Returns each agent's id, engine, name, role, status (working/idle/blocked/exited) and working directory. Use this to discover agents, check who is available to take a task, and recover handles after long sequences.",
+		description: "List the team agents currently open in the Agent Radar. Scoped to the CURRENT workspace (the session's working directory): only agents whose working directory is this folder or under it are returned. Returns each agent's id, engine, name, role, status (working/idle/blocked/exited) and working directory. Use this to discover agents, check who is available to take a task, and recover handles after long sequences.",
 		parameters: {},
 		output: {
 			schema: {
@@ -1284,16 +1458,22 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => {
 				const list = value;
-				if (list.length === 0) return [{ type: "text", text: "没有已打开的智能体。用 agent_open 打开（claude / opencode / codex）。" }];
+				if (list.length === 0) return [{ type: "text", text: "当前工作区没有已打开的智能体。用 agent_open 打开（claude / opencode / codex）。" }];
 				return [{
 					type: "text",
-					text: `团队智能体（${list.length}）：\n${list.map((a) => `  ${a.id}  ${a.name} (${a.type})  [${a.status}]${a.role ? ` — ${a.role}` : ""}`).join("\n")}`
+					text: `当前工作区团队智能体（${list.length}）：\n${list.map((a) => `  ${a.id}  ${a.name} (${a.type})  [${a.status}]${a.role ? ` — ${a.role}` : ""}`).join("\n")}`
 				}];
 			}
 		},
 		execute: (_args, exec) => {
 			exec.signal.throwIfAborted();
-			return Promise.resolve(registry.list().map((a) => ({
+			// Workspace-scoped: only the session's own folder (and subfolders).
+			const sessionId = exec.agent?.session?.id;
+			const headerCwd = sessionId === void 0 ? void 0 : ctx.sessions.get(sessionId)?.header?.cwd;
+			const list = (typeof headerCwd === "string" && headerCwd !== "")
+				? registry.listByCwd(headerCwd)
+				: registry.list();
+			return Promise.resolve(list.map((a) => ({
 				id: a.id,
 				type: a.type,
 				name: a.name,
@@ -1611,7 +1791,30 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 		const memoryStore = (cwd) => storeFor(cwd ?? url.searchParams.get("cwd") ?? void 0);
 		try {
 			if (req.method === "GET" && path === "/agents") {
-				writeOk(res, { agents: registry.list() });
+				const cwd = url.searchParams.get("cwd") ?? "";
+				writeOk(res, { agents: cwd !== "" ? registry.listByCwd(cwd) : registry.list() });
+				return;
+			}
+			if (req.method === "POST" && path === "/agents/scan") {
+				const body = await readBody(req);
+				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
+				writeOk(res, registry.scanCwd(cwd));
+				return;
+			}
+			// Re-spawn one saved agent of a folder (ghost "恢复" button).
+			const restoreMatch = path.match(/^\/agents\/([^/]+)\/restore$/);
+			if (restoreMatch !== null && req.method === "POST") {
+				const body = await readBody(req);
+				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
+				writeOk(res, { agent: registry.restoreSaved(cwd, restoreMatch[1]) });
+				return;
+			}
+			// Forget (delete) one saved agent record of a folder (ghost "✕" button).
+			const forgetMatch = path.match(/^\/agents\/([^/]+)\/forget$/);
+			if (forgetMatch !== null && req.method === "POST") {
+				const body = await readBody(req);
+				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
+				writeOk(res, registry.forgetSaved(cwd, forgetMatch[1]));
 				return;
 			}
 			if (req.method === "GET" && path === "/binaries") {
@@ -1767,7 +1970,7 @@ function registerWebsockets(ctx, registry, fence) {
 				socket.destroy();
 				return;
 			}
-			listWss.handleUpgrade(req, socket, head, (ws) => attachList(registry, ws));
+			listWss.handleUpgrade(req, socket, head, (ws) => attachList(registry, ws, req));
 		}
 	}), "dsh-agent-commander: list WebSocket");
 	ctx.effect(() => () => {
@@ -1776,9 +1979,17 @@ function registerWebsockets(ctx, registry, fence) {
 	}, "dsh-agent-commander: websocket teardown");
 }
 
-function attachList(registry, ws) {
+function attachList(registry, ws, req) {
+	// Optional ?cwd= scope: when the radar connects for a specific workspace
+	// folder, only push agents that belong to that folder (listByCwd).
+	let cwd = void 0;
+	try {
+		cwd = new URL(req.url ?? "/", "http://dsh.internal").searchParams.get("cwd") ?? void 0;
+	} catch {}
 	const send = () => {
-		if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(registry.list()));
+		if (ws.readyState === WebSocket.OPEN) {
+			ws.send(JSON.stringify(cwd !== void 0 && cwd !== "" ? registry.listByCwd(cwd) : registry.list()));
+		}
 	};
 	send();
 	const unsubscribe = registry.subscribe(send);
@@ -1871,13 +2082,26 @@ export class AgentCommanderService extends Service {
 			ctx.logger?.warn?.("[dsh-agent-commander] node-pty unavailable — agent spawn disabled");
 		}
 		this.baseCwd = typeof config.baseCwd === "string" && config.baseCwd !== "" ? config.baseCwd : process.cwd();
+		// 项目根目录 = 创建智能体时所在会话的工作目录。所有智能体配置收拢到
+		// 项目根 .deepseek/agents.json（即使智能体 cwd 是子目录），保证配置
+		// 都在用户所指的项目根目录下。
+		this.projectRootOf = (handle) => {
+			const sessionId = handle?.sessionId;
+			if (typeof sessionId === "string" && sessionId !== "") {
+				try {
+					const headerCwd = ctx.sessions.get(sessionId)?.header?.cwd;
+					if (typeof headerCwd === "string" && headerCwd !== "") return headerCwd;
+				} catch {}
+			}
+			return handle?.cwd ?? this.baseCwd;
+		};
 		// Per-project memory stores: one SQLite knowledge base per working
 		// directory, so the plugin tools and the agents read/write the SAME
 		// .deepseek/memory.db of whichever project they operate in.
 		this.stores = new Map();
 		this.baseStore = new MemoryStore(this.baseCwd);
 		this.stores.set(this.baseCwd, this.baseStore);
-		this.registry = new AgentRegistry(this.nodePty, config.maxAgents ?? MAX_AGENTS_DEFAULT, this.baseCwd, (cwd) => this.storeFor(cwd));
+		this.registry = new AgentRegistry(this.nodePty, config.maxAgents ?? MAX_AGENTS_DEFAULT, this.baseCwd, (cwd) => this.storeFor(cwd), (handle) => this.projectRootOf(handle));
 		const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts);
 		const resolveCwd = (sessionId) => sessionCwdOf(ctx, sessionId);
 		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd);

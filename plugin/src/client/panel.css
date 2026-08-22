@@ -85,6 +85,17 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+.dhac_workspace {
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-secondary);
+	white-space: nowrap;
+	flex: none;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding: 3px 12px 5px;
+	cursor: default;
+}
 .dhac_count {
 	min-width: 18px;
 	height: 16px;
@@ -517,6 +528,22 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	justify-content: center;
 	align-items: center;
 	display: flex;
+}
+.dhac_terminalDead {
+	flex: 1;
+	min-height: 0;
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-tertiary);
+	justify-content: center;
+	align-items: center;
+	gap: 8px;
+	flex-direction: column;
+	display: flex;
+	padding: 16px;
+	text-align: center;
+}
+.dhac_terminalDeadHint {
+	opacity: 0.85;
 }
 
 /* ---- resize handle + status toasts ---- */

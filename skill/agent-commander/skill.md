@@ -21,6 +21,7 @@ description: 多智能体总指挥方法论（DSH 原生版）— 用 agent_open
 
 ```text
 agent_list      # 查看当前有哪些智能体在线（id / 引擎 / 名称 / 角色 / 状态）
+                # 注意：结果按“当前工作区”隔离，只返回本文件夹（含子目录）的智能体；切换工作区后列表自动跟随
 ```
 
 建立智能体清单：
@@ -267,7 +268,7 @@ DeepSeek 总指挥也有 mem_query / mem_add 工具直接读写。
 
 ```text
 agent_open    type=<claude|opencode|codex|codebuddy|pi|qwen> name=? role=? skills=? cwd=?  # 开智能体
-agent_list                                                               # 看在线智能体
+agent_list                                                               # 看在线智能体（按当前工作区隔离）
 agent_read   id=? bytes=?                                               # 读最近输出
 agent_send   id=? text=? submit=true|false                              # 派活/发消息
 agent_approve id=? choice=?                                             # 确认弹窗（默认选1=Yes）
