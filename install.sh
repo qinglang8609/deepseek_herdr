@@ -123,19 +123,31 @@ else
 	echo "-- 复用已有 client bundle"
 fi
 
-# 2) 标准安装：dsh plugin add（pnpm 转发 + bundles 层栈自动合并）
+# 2) 标准安装：pnpm pack 出 tarball，再 `dsh plugin add <tarball>`
+#    （官方 publish.md 的「交付 tarball」路径）。注意：`dsh plugin add ./plugin`
+#    （目录）会被 pnpm 按 link: 处理 —— 不安装插件自身依赖，且插件文件按真实路径
+#    解析时裸 import（@deepseek-ai/* 等）会失败；tarball 安装为真实目录并装齐依赖。
 INSTALLED_STANDARD=""
 if [ -n "$DSH_CLI" ] && [ -z "$FORCE_MANUAL" ]; then
 	# 让 pnpm（nvm/corepack 安装的）可被 dsh 找到
 	export PATH="$HOME/.nvm/versions/node/v24.18.0/bin:$PATH"
 	if command -v pnpm >/dev/null 2>&1; then
-		echo "-- 标准安装（dsh plugin add，pnpm 管理依赖与 bundles 层栈）"
-		if "$NODE_BIN" "$DSH_CLI" plugin --profile "$PROFILE" add "$PLUGIN_DIR"; then
+		VERSION="$("$NODE_BIN" -e "console.log(require('$PLUGIN_DIR/package.json').version)")"
+		TARBALL="$PLUGIN_DIR/dsh-agent-commander-$VERSION.tgz"
+		if [ ! -f "$TARBALL" ] || [ -n "${REPACK:-}" ]; then
+			echo "-- pnpm pack（$TARBALL）"
+			( cd "$PLUGIN_DIR" && pnpm pack >/dev/null )
+		else
+			echo "-- 复用已有 tarball（$TARBALL）"
+		fi
+		echo "-- 标准安装（dsh plugin add tarball）"
+		if "$NODE_BIN" "$DSH_CLI" plugin --profile "$PROFILE" add "$TARBALL"; then
 			INSTALLED_STANDARD="1"
 		else
-			echo "警告：标准安装失败，回退到手动复制。若因网络/构建权限失败，可先执行："
-			echo "  dsh plugin --profile $PROFILE add $PLUGIN_DIR"
-			echo "  （首次 git 依赖需在 $PROFILE_DIR/pnpm-workspace.yaml 的 allowBuilds 放行）"
+			echo "警告：标准安装失败，回退到手动复制。若因构建脚本被拒（pnpm ≥10），请把下面这行加到"
+			echo "  $PROFILE_DIR/pnpm-workspace.yaml 后重试："
+			echo "  allowBuilds:"
+			echo "    node-pty: true"
 		fi
 	else
 		echo "警告：未找到 pnpm，回退到手动复制（标准流程需要 pnpm）。"

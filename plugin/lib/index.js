@@ -18,19 +18,59 @@
 // .deepseek/memory.db (node:sqlite, seeded by this plugin).
 // ============================================================================
 
-import { WebSocket, WebSocketServer } from "ws";
 import { createRequire } from "node:module";
 import { existsSync, chmodSync, readdirSync, writeFileSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { dirname, join, isAbsolute, resolve, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { Service } from "@deepseek-ai/cordis";
 import Schema from "@deepseek-ai/schemastery";
 
 const require = createRequire(import.meta.url);
+
+// ---------------------------------------------------------------------------
+// Fallback module resolution — this plugin may be installed into a profile as
+// a pnpm `link:` (symlink → the checkout), a manual copy, a tarball, or a git
+// clone. Node resolves the plugin's file to its realpath by default, so bare
+// `require("ws")` / `require("node-pty")` can miss the profile's node_modules.
+// The Harness guarantees a mirror of the app's ENTIRE dependency tree at
+// ~/.dsh/profiles/node_modules (healProfilesModuleFallback), so we resolve
+// against that anchor (plus the app's own host root) as a fallback chain.
+// ---------------------------------------------------------------------------
+function moduleAnchors() {
+	const anchors = [import.meta.url];
+	try {
+		anchors.push(pathToFileURL(join(homedir(), ".dsh", "profiles", "node_modules", "package.json")).href);
+	} catch {}
+	try {
+		anchors.push(pathToFileURL(join(dirname(process.execPath), "..", "Resources", "host", "package.json")).href);
+	} catch {}
+	return anchors;
+}
+const fallbackRequire = (() => {
+	const anchors = moduleAnchors();
+	return (spec) => {
+		let lastError = null;
+		for (const anchor of anchors) {
+			try {
+				return createRequire(anchor)(spec);
+			} catch (error) {
+				lastError = error;
+			}
+		}
+		throw lastError ?? new Error(`cannot resolve "${spec}" from any module anchor`);
+	};
+})();
+/** Lazy `ws` — resolved through the anchor chain so terminal WebSockets work no matter how the plugin was installed. */
+let wsModule = null;
+function getWs() {
+	if (wsModule === null) wsModule = fallbackRequire("ws");
+	return wsModule;
+}
+
 const API_PREFIX = "/agent-commander/api";
 const WS_TERMINAL = "/agent-commander/ws/terminal";
 const WS_LIST = "/agent-commander/ws/list";
@@ -183,8 +223,14 @@ function loadNodePty() {
 	try {
 		return require("node-pty");
 	} catch (error) {
-		console.warn("[dsh-agent-commander] node-pty failed to load:", error?.message ?? error);
-		return null;
+		try {
+			// Installed as link/tarball/git — the plugin's own node_modules may be
+			// absent; fall back to the Harness profile module mirror.
+			return fallbackRequire("node-pty");
+		} catch {
+			console.warn("[dsh-agent-commander] node-pty failed to load:", error?.message ?? error);
+			return null;
+		}
 	}
 }
 function ensureSpawnHelper() {
@@ -2038,6 +2084,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}) {
 // WebSocket routes
 // ---------------------------------------------------------------------------
 function registerWebsockets(ctx, registry, fence, cfg = {}) {
+	const { WebSocketServer } = getWs();
 	const terminalWss = new WebSocketServer({ noServer: true });
 	const listWss = new WebSocketServer({ noServer: true });
 	ctx.effect(() => ctx.webServer.registerUpgrade({
@@ -2073,6 +2120,7 @@ function attachList(registry, ws, req) {
 	try {
 		cwd = new URL(req.url ?? "/", "http://dsh.internal").searchParams.get("cwd") ?? void 0;
 	} catch {}
+	const { WebSocket } = getWs();
 	const send = () => {
 		if (ws.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify(cwd !== void 0 && cwd !== "" ? registry.listByCwd(cwd) : registry.list()));
@@ -2095,6 +2143,7 @@ function attachTerminal(registry, ws, req, cfg = {}) {
 		}
 		const wsInputLimit = Number.isFinite(cfg.wsInputLimit) && cfg.wsInputLimit > 0 ? cfg.wsInputLimit : WS_INPUT_LIMIT;
 		if (handle.transcript !== "") ws.send(handle.transcript);
+		const { WebSocket } = getWs();
 		const onData = (data) => {
 			if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 4 * 1024 * 1024) ws.send(data);
 		};

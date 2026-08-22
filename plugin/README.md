@@ -47,18 +47,25 @@
 
 ## 安装
 
-### 标准安装（推荐，`dsh plugin add`）
+### 标准安装（推荐，`dsh plugin add` + tarball）
 
 本插件是符合官方标准的**组合包（bundle）**：`package.json` 声明 `dsh.bundle.patch`
 （`cordis.patch.yml`），用官方流程装进 profile（见
 [docs/user/develop/basic/publish.md](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）：
 
 ```bash
-# 从本仓库目录（插件目录即组合包）：
-dsh plugin --profile web add ./plugin
-# 或用发布产物 tarball（无需源码/构建权限）：
+# 从本仓库目录：先打发布 tarball（已附在仓库 plugin/ 下），再标准安装：
+cd plugin && pnpm pack
 dsh plugin --profile web add ./dsh-agent-commander-0.2.0.tgz
 ```
+
+> **为什么用 tarball 而不是 `dsh plugin add ./plugin`？** 目录安装会被 pnpm 按
+> `link:` 处理——不安装插件自身的依赖，且插件模块按真实路径解析时，顶层裸导入
+> （`@deepseek-ai/dsh-tools` 等）会 `ERR_MODULE_NOT_FOUND`（已实测）。tarball 安装
+> 为 profile 里的**真实目录**并装齐 `node-pty`/`ws` 依赖，`@deepseek-ai/*` 经
+> `~/.dsh/profiles/node_modules` 的应用依赖镜像解析——这就是官方「交付 tarball」
+> 推荐路径。`file:<目录>` 效果相同，但首次需在 profile 的 `pnpm-workspace.yaml`
+> 放行 `allowBuilds: node-pty: true`。
 
 `dsh plugin` 会在 profile 目录内转发给 pnpm 安装，并根据 `dsh.bundle` 声明自动把
 `dsh-agent-commander` 追加进 `dsh.profile.bundles` 层栈。装完**重启 DeepSeek Harness**
