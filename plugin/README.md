@@ -47,20 +47,91 @@
 
 ## 安装
 
+### 标准安装（推荐，`dsh plugin add`）
+
+本插件是符合官方标准的**组合包（bundle）**：`package.json` 声明 `dsh.bundle.patch`
+（`cordis.patch.yml`），用官方流程装进 profile（见
+[docs/user/develop/basic/publish.md](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）：
+
 ```bash
-bash install.sh            # 默认 profile: web
+# 从本仓库目录（插件目录即组合包）：
+dsh plugin --profile web add ./plugin
+# 或用发布产物 tarball（无需源码/构建权限）：
+dsh plugin --profile web add ./dsh-agent-commander-0.2.0.tgz
+```
+
+`dsh plugin` 会在 profile 目录内转发给 pnpm 安装，并根据 `dsh.bundle` 声明自动把
+`dsh-agent-commander` 追加进 `dsh.profile.bundles` 层栈。装完**重启 DeepSeek Harness**
+生效（插件集变更需要重启）。
+
+### 一键脚本（自动标准流程 + 回退）
+
+```bash
+bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标准流程
 # bash install.sh --profile <name>   # 指定 profile
 # bash install.sh --remove           # 卸载
 # bash install.sh --skill-only       # 只装 skill
+# bash install.sh --manual           # 强制手动复制（无 dsh CLI/pnpm 时自动回退）
 ```
 
-装完**重启 DeepSeek Harness** 生效（插件集变更需要重启）。
-
-安装脚本会：
+脚本会：
 1. 构建 client bundle（`plugin/scripts/build-client.mjs`）
-2. 复制插件到 `~/.dsh/profiles/web/node_modules/dsh-agent-commander`
-3. 更新 profile 的 `package.json`（dependencies + `dsh.profile.bundles`）
-4. 安装 `agent-commander` skill 到 `~/.agents/skills/`
+2. 有 `dsh` CLI + `pnpm` 时走标准 `dsh plugin add`；否则回退为手动复制插件到
+   `~/.dsh/profiles/web/node_modules/dsh-agent-commander` 并更新 profile 的
+   `package.json`（dependencies + `dsh.profile.bundles`）
+3. 安装随插件分发的 `agent-commander` skill 到 `~/.agents/skills/`
+   （标准安装下由插件启动时自动完成，脚本会兜底同步一次）
+
+## 配置（Config schema）
+
+插件导出标准 **Schemastery Config schema**（`lib/index.js` 中的 `export const Config`），
+所有可调参数都能在 `cordis.yml` 里改，无需改代码（官方约定：
+[docs/user/develop/basic/config.md](https://deepseek-harness.github.io/deepseek-harness/develop/basic/config)）。
+在 profile 的 `cordis.patch.yml` 覆盖对应行：
+
+```yaml
+- id: agent-commander
+  config:
+    maxAgents: 12              # 同时打开的最大智能体数（默认 8）
+    transcriptLimit: 2097152   # 每个智能体转录环上限字节（默认 1 MiB）
+    rolePresets:
+      - 数据库专家
+      - 设计专家
+      - 前端专家
+      - 测试专家
+      - 代码审查专家
+      - 架构师
+      - 安全专家              # 自定义预设会出现在「新建智能体」弹窗里
+    memoryDir: .deepseek       # 共享记忆目录名（默认 .deepseek）
+    allowedSignals: [SIGINT, SIGTSTP, SIGTERM]
+    baseCwd: /path/to/project  # 无会话工作目录时的默认项目根
+```
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `maxAgents` | number | 8 | 同时打开的智能体上限 |
+| `transcriptLimit` | number | 1048576 | 每个智能体转录环上限（字节） |
+| `bodyLimit` | number | 1048576 | HTTP API 请求体上限（字节） |
+| `wsInputLimit` | number | 65536 | 终端 WebSocket 单帧输入上限（字节） |
+| `allowedSignals` | string[] | SIGINT/SIGTSTP/SIGTERM | 允许通过 API/终端发送的信号 |
+| `rolePresets` | string[] | 6 个内置预设 | 「新建智能体」弹窗的角色预设 |
+| `baseCwd` | string | "" | 无会话工作目录时的默认项目根（空=进程 cwd） |
+| `memoryDir` | string | ".deepseek" | 共享记忆目录名（memory.md / task-board.md / agents.json / memory.db 等） |
+
+运行时配置快照还通过 `GET /agent-commander/api/config` 暴露给客户端（角色预设、
+引擎列表、限额），客户端「新建智能体」弹窗会优先使用服务端配置的 `rolePresets`。
+
+## 发布（发布产物）
+
+按官方打包教程（publish.md），插件可分发为：
+
+- **tarball（无需构建权限，推荐）**：在 `plugin/` 下执行 `pnpm pack`，得到
+  `dsh-agent-commander-0.2.0.tgz`；用户 `dsh plugin add ./dsh-agent-commander-0.2.0.tgz`。
+- **git 安装**：`dsh plugin add github:qinglang8609/deepseek_herdr`（仓库根目录需是
+  插件包根；本仓库插件在 `plugin/` 子目录，因此推荐 tarball 或 `dsh plugin add ./plugin`）。
+  git 安装拉的是源码，靠 `package.json` 的 `prepare` 脚本构建 client bundle；
+  pnpm ≥10 需在 profile 的 `pnpm-workspace.yaml` 里 `allowBuilds` 放行该包。
+- **npm 发布**：`pnpm publish`（发布前自动跑 `prepare` 构建好 `lib/`）。
 
 ## 使用
 
@@ -81,20 +152,25 @@ bash install.sh            # 默认 profile: web
 ```
 plugin/
 ├── lib/
-│   ├── index.js          # node 端：AgentRegistry + 共享记忆播种 + agent_* 工具 + WS/HTTP 路由
+│   ├── index.js          # node 端：Config schema + AgentRegistry + 共享记忆播种 + agent_* 工具 + WS/HTTP 路由
 │   └── client.js         # client bundle（构建产物，勿手改）
 ├── src/client/           # client 源码
 │   ├── head.js / tail.js # bundle 骨架
 │   ├── app.js            # 雷达面板 + 终端详情 + 新建弹窗
 │   ├── panel.css         # 面板样式（DSH design tokens）
 │   └── vendor/           # 内联的 xterm 5.5.0 + addon-fit + xterm.css（MIT）
+├── skill/agent-commander/skill.md  # 总指挥 skill（随插件包分发，启动时自动装到 ~/.agents/skills/）
 ├── scripts/build-client.mjs  # 组装 client.js
 ├── cordis.patch.yml      # 激活补丁
 └── package.json
-skill/agent-commander/skill.md  # 总指挥 skill
 templates/experience.md           # 经验总结模板
 install.sh
 ```
+
+**skill 随插件一起分发**：`skill/agent-commander/skill.md` 在插件包内（`package.json` 的
+`files` 已包含 `skill/`，tarball 会带上），插件启动时自动把它同步到
+`~/.agents/skills/agent-commander/`（只在缺失或内容不同时写入，不覆盖用户改动）——
+因此 `dsh plugin add` 装完插件即装完 skill，无需单独步骤。
 
 改完 client 源码后重新构建：
 

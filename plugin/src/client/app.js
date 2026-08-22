@@ -225,6 +225,34 @@ function useDetailsColumn() {
 // ---------------------------------------------------------------------------
 const AGENT_TYPES = ["claude", "opencode", "codex", "codebuddy", "pi", "qwen"];
 const COMPACT_SUPPORTED = new Set(["claude", "codebuddy", "qwen"]);
+const DEFAULT_ROLE_PRESETS = ["数据库专家", "设计专家", "前端专家", "测试专家", "代码审查专家", "架构师"];
+
+// ---------------------------------------------------------------------------
+// Runtime config (mirror of the server-side Config schema, fetched lazily).
+// The 新建智能体 dialog uses server-configured rolePresets when available,
+// falling back to the built-in presets — so a user can add presets from
+// cordis.yml without touching client code (plugin standard: no hardcoded
+// tunables). Also exposes agentTypes/limits for other client plugins.
+// ---------------------------------------------------------------------------
+let pluginConfig = null;
+let pluginConfigPromise = null;
+function getPluginConfig() {
+	if (pluginConfigPromise === null) {
+		pluginConfigPromise = apiGet("/config").then((value) => {
+			pluginConfig = value?.config ?? null;
+			return pluginConfig;
+		}).catch(() => {
+			pluginConfig = null;
+			return null;
+		});
+	}
+	return pluginConfigPromise;
+}
+function getRolePresets() {
+	return (pluginConfig !== null && Array.isArray(pluginConfig.rolePresets) && pluginConfig.rolePresets.length > 0)
+		? pluginConfig.rolePresets
+		: DEFAULT_ROLE_PRESETS;
+}
 
 function AgentTerminal({ agentId, signalRef }) {
 	const containerRef = useRef(null);
@@ -385,6 +413,7 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 	const [cwd, setCwd] = useState(defaultCwd ?? "");
 	const [binaries, setBinaries] = useState([]);
 	const [availableSkills, setAvailableSkills] = useState([]);
+	const [rolePresets, setRolePresets] = useState(DEFAULT_ROLE_PRESETS);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState(null);
 
@@ -395,6 +424,7 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 			setAvailableSkills(list);
 			setSkills(list.map((s) => s.path));
 		}).catch(() => {});
+		getPluginConfig().then(() => setRolePresets(getRolePresets()));
 	}, []);
 
 	const toggleSkill = (path) => {
@@ -438,7 +468,7 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 				h("div", { className: "dhac_field" }, [
 					h("label", { className: "dhac_fieldLabel" }, "角色定义（注入给该智能体的开场简报）"),
 					h("div", { className: "dhac_presets" },
-						["数据库专家", "设计专家", "前端专家", "测试专家", "代码审查专家", "架构师"].map((preset) =>
+						rolePresets.map((preset) =>
 							h("button", { key: preset, type: "button", className: "dhac_preset", onClick: () => setRole(preset) }, preset))),
 					h("textarea", {
 						className: "dhac_textarea",

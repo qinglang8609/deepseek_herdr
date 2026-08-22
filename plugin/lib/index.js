@@ -25,8 +25,10 @@ import { gzipSync } from "node:zlib";
 import { dirname, join, isAbsolute, resolve, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { Service } from "@deepseek-ai/cordis";
+import Schema from "@deepseek-ai/schemastery";
 
 const require = createRequire(import.meta.url);
 const API_PREFIX = "/agent-commander/api";
@@ -242,11 +244,71 @@ function listSkills() {
 }
 
 // ---------------------------------------------------------------------------
+// Bundled skill self-install — the agent-commander skill ships INSIDE this
+// plugin package (skill/agent-commander/skill.md, included in the tarball via
+// package.json "files"), so a plain `dsh plugin add` also makes the skill
+// available to the model without a separate install step. Best-effort: only
+// writes when missing or different, never clobbers user edits.
+// ---------------------------------------------------------------------------
+function ensureBundledSkillInstalled() {
+	try {
+		const source = join(dirname(fileURLToPath(import.meta.url)), "..", "skill", "agent-commander", "skill.md");
+		if (!existsSync(source)) return;
+		const targetDir = join(homedir(), ".agents", "skills", "agent-commander");
+		const target = join(targetDir, "skill.md");
+		const content = readFileSync(source, "utf8");
+		const needsWrite = !existsSync(target) || readFileSync(target, "utf8") !== content;
+		if (needsWrite) {
+			mkdirSync(targetDir, { recursive: true });
+			writeFileSync(target, content, "utf8");
+			console.info("[dsh-agent-commander] bundled skill installed to ~/.agents/skills/agent-commander/");
+		}
+	} catch (error) {
+		console.warn("[dsh-agent-commander] bundled skill install failed:", error?.message ?? error);
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Shared memory seeding — placed under <project>/.deepseek/ with English file
 // names: memory.md (长期记忆) / task-board.md (任务看板) / experience.md
 // (经验总结) / handoffs/ (交接区)
 // ---------------------------------------------------------------------------
 const MEMORY_DIR = ".deepseek";
+
+// ---------------------------------------------------------------------------
+// Plugin configuration — a Standard Schema (Schemastery) exported as `Config`,
+// per the official plugin standard (docs/user/develop/basic/config.md):
+//   1. every deployment-tunable parameter is a config field (no hardcoded
+//      constants users cannot change);
+//   2. defaults live IN the schema, so the loader fills them in and validates
+//      `config` passed to apply() on mount;
+//   3. the schema also drives the plugin's settings form in the app UI.
+// Users override any field from their profile cordis.patch.yml, e.g.:
+//   - id: agent-commander
+//     config:
+//       maxAgents: 12
+//       transcriptLimit: 2097152
+//       rolePresets: [数据库专家, 设计专家, 前端专家, 测试专家, 代码审查专家, 架构师, 安全专家]
+// ---------------------------------------------------------------------------
+export const Config = Schema.object({
+	/** Hard cap on concurrently open agents. */
+	maxAgents: Schema.natural().default(MAX_AGENTS_DEFAULT),
+	/** Per-agent transcript ring cap in bytes; older output is dropped. */
+	transcriptLimit: Schema.natural().default(TRANSCRIPT_LIMIT),
+	/** HTTP request body cap in bytes for /agent-commander/api. */
+	bodyLimit: Schema.natural().default(BODY_LIMIT),
+	/** Per-frame cap in bytes for WebSocket terminal input. */
+	wsInputLimit: Schema.natural().default(WS_INPUT_LIMIT),
+	/** Signals allowed via the agent API / terminal WebSocket. */
+	allowedSignals: Schema.array(Schema.string()).default([...ALLOWED_SIGNALS]),
+	/** Role presets offered by the 新建智能体 dialog (also exposed via /api/config). */
+	rolePresets: Schema.array(Schema.string()).default([...ROLE_PRESETS]),
+	/** Default project root when the session has no working directory. */
+	baseCwd: Schema.string().default(""),
+	/** Shared-memory directory name placed under each project root. */
+	memoryDir: Schema.string().default(MEMORY_DIR)
+});
+
 const MEMORY_FILES = {
 	"memory.md": [
 		"# Memory (记忆库)",
@@ -313,12 +375,12 @@ const MEMORY_FILES = {
 	].join("\n")
 };
 
-/** Seed the team shared-memory files under <cwd>/.deepseek/ (never overwrites). */
-function seedSharedMemory(cwd) {
+/** Seed the team shared-memory files under <cwd>/<memoryDir>/ (never overwrites). */
+function seedSharedMemory(cwd, memoryDir = MEMORY_DIR) {
 	if (typeof cwd !== "string" || cwd === "") return;
 	try {
 		mkdirSync(cwd, { recursive: true });
-		const memoryRoot = join(cwd, MEMORY_DIR);
+		const memoryRoot = join(cwd, memoryDir);
 		mkdirSync(memoryRoot, { recursive: true });
 		mkdirSync(join(memoryRoot, "handoffs"), { recursive: true });
 		for (const [fileName, content] of Object.entries(MEMORY_FILES)) {
@@ -526,8 +588,8 @@ function loadSqlite() {
 }
 
 var MemoryStore = class {
-	constructor(cwd) {
-		this.root = join(cwd, MEMORY_DIR);
+	constructor(cwd, memoryDir = MEMORY_DIR) {
+		this.root = join(cwd, memoryDir);
 		this.db = null;
 		this.sqlite = loadSqlite();
 		if (this.sqlite === null) {
@@ -647,12 +709,16 @@ function deriveStatus(transcript, current) {
 // Agent registry
 // ---------------------------------------------------------------------------
 var AgentRegistry = class {
-	constructor(nodePty, maxAgents, baseCwd, onSpawn, projectRootOf) {
+	constructor(nodePty, maxAgents, baseCwd, onSpawn, projectRootOf, opts = {}) {
 		this.nodePty = nodePty;
 		this.maxAgents = maxAgents;
 		this.baseCwd = baseCwd ?? process.cwd();
 		this.onSpawn = typeof onSpawn === "function" ? onSpawn : null;
 		this.projectRootOf = typeof projectRootOf === "function" ? projectRootOf : null;
+		// Configurable limits (config → apply → constructor).
+		this.transcriptLimit = Number.isFinite(opts.transcriptLimit) && opts.transcriptLimit > 0 ? opts.transcriptLimit : TRANSCRIPT_LIMIT;
+		this.allowedSignals = Array.isArray(opts.allowedSignals) && opts.allowedSignals.length > 0 ? opts.allowedSignals : [...ALLOWED_SIGNALS];
+		this.memoryDir = typeof opts.memoryDir === "string" && opts.memoryDir !== "" ? opts.memoryDir : MEMORY_DIR;
 		this.agents = new Map();
 		this.listeners = new Set();
 		this.statusTimer = null;
@@ -679,7 +745,7 @@ var AgentRegistry = class {
 		const binary = resolveBinary(type);
 		if (binary === null) throw new Error(`agent type "${type}" is not installed`);
 		const targetCwd = validateCwd(cwd, this.baseCwd);
-		seedSharedMemory(targetCwd);
+		seedSharedMemory(targetCwd, this.memoryDir);
 		if (this.onSpawn !== null) {
 			try {
 				this.onSpawn(targetCwd);
@@ -715,7 +781,7 @@ var AgentRegistry = class {
 		handle.pid = handle.pty.pid;
 		handle.pty.onData((data) => {
 			handle.transcript += data;
-			if (handle.transcript.length > TRANSCRIPT_LIMIT) handle.transcript = handle.transcript.slice(handle.transcript.length - TRANSCRIPT_LIMIT);
+			if (handle.transcript.length > this.transcriptLimit) handle.transcript = handle.transcript.slice(handle.transcript.length - this.transcriptLimit);
 			handle.updatedAt = Date.now();
 			const next = deriveStatus(handle.transcript, handle.status);
 			if (next !== handle.status) {
@@ -832,7 +898,7 @@ var AgentRegistry = class {
 		handle.pty.resize(Math.max(2, Math.floor(cols)), Math.max(2, Math.floor(rows)));
 	}
 	signal(id, signal) {
-		if (!ALLOWED_SIGNALS.includes(signal)) throw new Error(`signal "${signal}" not allowed — use ${ALLOWED_SIGNALS.join(", ")}`);
+		if (!this.allowedSignals.includes(signal)) throw new Error(`signal "${signal}" not allowed — use ${this.allowedSignals.join(", ")}`);
 		const handle = this.agents.get(id);
 		if (handle === void 0) throw new Error(`agent "${id}" not found`);
 		try {
@@ -1062,8 +1128,8 @@ var AgentRegistry = class {
 			// own the files and reconcile them when they finish.
 			if (!this.restoring) {
 				for (const [cwd, entries] of byCwd) {
-					mkdirSync(join(cwd, MEMORY_DIR), { recursive: true });
-					writeFileSync(join(cwd, MEMORY_DIR, "agents.json"), JSON.stringify({ agents: entries }, null, 2), "utf8");
+					mkdirSync(join(cwd, this.memoryDir), { recursive: true });
+					writeFileSync(join(cwd, this.memoryDir, "agents.json"), JSON.stringify({ agents: entries }, null, 2), "utf8");
 				}
 			}
 			// Cleanup: roots with no live agents in THIS registry no longer need
@@ -1079,7 +1145,7 @@ var AgentRegistry = class {
 				if (byCwd.has(cwd)) continue;
 				if (this.restoring || this.shuttingDown) continue;
 				try {
-					const file = join(cwd, MEMORY_DIR, "agents.json");
+					const file = join(cwd, this.memoryDir, "agents.json");
 					if (!existsSync(file)) continue;
 					let saved = [];
 					try {
@@ -1096,7 +1162,7 @@ var AgentRegistry = class {
 			// Rebuild the global workspace index: keep only roots with a config.
 			const merged = new Set();
 			for (const cwd of [...prevRoots, ...byCwd.keys()]) {
-				if (existsSync(join(cwd, MEMORY_DIR, "agents.json"))) merged.add(cwd);
+				if (existsSync(join(cwd, this.memoryDir, "agents.json"))) merged.add(cwd);
 			}
 			mkdirSync(dirname(indexFile), { recursive: true });
 			writeFileSync(indexFile, JSON.stringify([...merged], null, 2), "utf8");
@@ -1142,7 +1208,7 @@ var AgentRegistry = class {
 	 * they never resurface as "restore" cards. */
 	scanCwd(cwd) {
 		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
-		const file = join(target, MEMORY_DIR, "agents.json");
+		const file = join(target, this.memoryDir, "agents.json");
 		let saved = [];
 		if (existsSync(file)) {
 			try {
@@ -1202,7 +1268,7 @@ var AgentRegistry = class {
 	 * when it becomes empty). */
 	forgetSaved(cwd, id) {
 		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
-		const file = join(target, MEMORY_DIR, "agents.json");
+		const file = join(target, this.memoryDir, "agents.json");
 		if (!existsSync(file)) return { removed: false };
 		let saved = [];
 		try {
@@ -1227,7 +1293,7 @@ var AgentRegistry = class {
 		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
 		const existing = this.agents.get(id);
 		if (existing !== void 0) return this.meta(existing);
-		const file = join(target, MEMORY_DIR, "agents.json");
+		const file = join(target, this.memoryDir, "agents.json");
 		if (!existsSync(file)) throw new Error(`no saved agents config in "${target}"`);
 		let saved = [];
 		try {
@@ -1254,7 +1320,7 @@ var AgentRegistry = class {
 			if (!Array.isArray(roots)) return 0;
 			const seen = new Set();
 			for (const root of roots) {
-				const file = join(root, MEMORY_DIR, "agents.json");
+				const file = join(root, this.memoryDir, "agents.json");
 				if (!existsSync(file)) continue;
 				let state;
 				try {
@@ -1780,7 +1846,9 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 // ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
-function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
+function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}) {
+	const bodyLimit = Number.isFinite(cfg.bodyLimit) && cfg.bodyLimit > 0 ? cfg.bodyLimit : BODY_LIMIT;
+	const rb = (req) => readBody(req, bodyLimit);
 	const handler = async (req, res) => {
 		if (!fence(req)) {
 			writeJson(res, 403, { ok: false, error: { code: "forbidden", message: "forbidden" } });
@@ -1790,13 +1858,32 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 		const path = url.pathname.slice(API_PREFIX.length).replace(/\/+$/, "") || "/";
 		const memoryStore = (cwd) => storeFor(cwd ?? url.searchParams.get("cwd") ?? void 0);
 		try {
+			// Sanitized runtime config — powers the client (role presets, engine
+			// list, limits) and lets other plugins inspect the active settings.
+			if (req.method === "GET" && path === "/config") {
+				writeOk(res, { config: {
+					maxAgents: registry.maxAgents,
+					transcriptLimit: registry.transcriptLimit,
+					bodyLimit,
+					wsInputLimit: Number.isFinite(cfg.wsInputLimit) && cfg.wsInputLimit > 0 ? cfg.wsInputLimit : WS_INPUT_LIMIT,
+					allowedSignals: registry.allowedSignals,
+					rolePresets: Array.isArray(cfg.rolePresets) && cfg.rolePresets.length > 0 ? cfg.rolePresets : [...ROLE_PRESETS],
+					baseCwd: registry.baseCwd,
+					memoryDir: registry.memoryDir,
+					agentTypes: AGENT_TYPES,
+					apiPrefix: API_PREFIX,
+					wsTerminal: WS_TERMINAL,
+					wsList: WS_LIST
+				} });
+				return;
+			}
 			if (req.method === "GET" && path === "/agents") {
 				const cwd = url.searchParams.get("cwd") ?? "";
 				writeOk(res, { agents: cwd !== "" ? registry.listByCwd(cwd) : registry.list() });
 				return;
 			}
 			if (req.method === "POST" && path === "/agents/scan") {
-				const body = await readBody(req);
+				const body = await rb(req);
 				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
 				writeOk(res, registry.scanCwd(cwd));
 				return;
@@ -1804,7 +1891,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 			// Re-spawn one saved agent of a folder (ghost "恢复" button).
 			const restoreMatch = path.match(/^\/agents\/([^/]+)\/restore$/);
 			if (restoreMatch !== null && req.method === "POST") {
-				const body = await readBody(req);
+				const body = await rb(req);
 				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
 				writeOk(res, { agent: registry.restoreSaved(cwd, restoreMatch[1]) });
 				return;
@@ -1812,7 +1899,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 			// Forget (delete) one saved agent record of a folder (ghost "✕" button).
 			const forgetMatch = path.match(/^\/agents\/([^/]+)\/forget$/);
 			if (forgetMatch !== null && req.method === "POST") {
-				const body = await readBody(req);
+				const body = await rb(req);
 				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
 				writeOk(res, registry.forgetSaved(cwd, forgetMatch[1]));
 				return;
@@ -1826,7 +1913,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 				return;
 			}
 			if (req.method === "POST" && path === "/agents") {
-				const body = await readBody(req);
+				const body = await rb(req);
 				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
 				const handle = registry.create({
 					type: String(body.type ?? ""),
@@ -1855,7 +1942,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 			if (agentMatch !== null) {
 				const [, id, op] = agentMatch;
 				if (op === "send" && req.method === "POST") {
-					const body = await readBody(req);
+					const body = await rb(req);
 					registry.send(id, String(body.text ?? ""), body.submit === true);
 					writeOk(res, { id, submitted: body.submit === true });
 					return;
@@ -1866,13 +1953,13 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 					return;
 				}
 				if (op === "approve" && req.method === "POST") {
-					const body = await readBody(req);
+					const body = await rb(req);
 					registry.approve(id, body.choice === void 0 ? "1" : String(body.choice));
 					writeOk(res, { id, choice: body.choice === void 0 ? "1" : String(body.choice) });
 					return;
 				}
 				if (op === "signal" && req.method === "POST") {
-					const body = await readBody(req);
+					const body = await rb(req);
 					registry.signal(id, String(body.signal ?? ""));
 					writeOk(res, { id, signal: body.signal });
 					return;
@@ -1906,7 +1993,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 				return;
 			}
 			if (req.method === "POST" && path === "/memory") {
-				const body = await readBody(req);
+				const body = await rb(req);
 				const id = memoryStore().addMemory({
 					namespace: body.namespace ?? "general",
 					title: String(body.title ?? ""),
@@ -1927,7 +2014,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 				return;
 			}
 			if (req.method === "POST" && path === "/cache/compress") {
-				const body = await readBody(req);
+				const body = await rb(req);
 				const id = body?.id;
 				const results = id
 					? [await registry.compressCache(registry.get(id)?.type ?? "", registry.get(id)?.cwd ?? "")]
@@ -1950,7 +2037,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd) {
 // ---------------------------------------------------------------------------
 // WebSocket routes
 // ---------------------------------------------------------------------------
-function registerWebsockets(ctx, registry, fence) {
+function registerWebsockets(ctx, registry, fence, cfg = {}) {
 	const terminalWss = new WebSocketServer({ noServer: true });
 	const listWss = new WebSocketServer({ noServer: true });
 	ctx.effect(() => ctx.webServer.registerUpgrade({
@@ -1960,7 +2047,7 @@ function registerWebsockets(ctx, registry, fence) {
 				socket.destroy();
 				return;
 			}
-			terminalWss.handleUpgrade(req, socket, head, (ws) => attachTerminal(registry, ws, req));
+			terminalWss.handleUpgrade(req, socket, head, (ws) => attachTerminal(registry, ws, req, cfg));
 		}
 	}), "dsh-agent-commander: terminal WebSocket");
 	ctx.effect(() => ctx.webServer.registerUpgrade({
@@ -1997,7 +2084,7 @@ function attachList(registry, ws, req) {
 	ws.on("error", () => unsubscribe());
 }
 
-function attachTerminal(registry, ws, req) {
+function attachTerminal(registry, ws, req, cfg = {}) {
 	try {
 		const url = new URL(req.url ?? "/", "http://dsh.internal");
 		const id = url.searchParams.get("id");
@@ -2006,6 +2093,7 @@ function attachTerminal(registry, ws, req) {
 			ws.close(1011, "agent not found");
 			return;
 		}
+		const wsInputLimit = Number.isFinite(cfg.wsInputLimit) && cfg.wsInputLimit > 0 ? cfg.wsInputLimit : WS_INPUT_LIMIT;
 		if (handle.transcript !== "") ws.send(handle.transcript);
 		const onData = (data) => {
 			if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 4 * 1024 * 1024) ws.send(data);
@@ -2028,7 +2116,7 @@ function attachTerminal(registry, ws, req) {
 			if (control === null || typeof control.type !== "string") return;
 			if (control.type === "input" && typeof control.data === "string") {
 				if (handle.exited) return;
-				if (control.data.length > WS_INPUT_LIMIT) return;
+				if (control.data.length > wsInputLimit) return;
 				try {
 					handle.pty.write(control.data);
 				} catch {}
@@ -2041,7 +2129,7 @@ function attachTerminal(registry, ws, req) {
 				return;
 			}
 			if (control.type === "signal" && typeof control.signal === "string") {
-				if (!ALLOWED_SIGNALS.includes(control.signal)) return;
+				if (!registry.allowedSignals.includes(control.signal)) return;
 				try {
 					handle.pty.kill(control.signal);
 				} catch {}
@@ -2078,12 +2166,28 @@ export class AgentCommanderService extends Service {
 		super(ctx, "agentCommander");
 		this.nodePty = loadNodePty();
 		ensureSpawnHelper();
+		// The agent-commander skill rides inside this bundle; make it available
+		// to ~/.agents/skills so the model picks it up (best-effort, no-clobber).
+		ensureBundledSkillInstalled();
 		if (this.nodePty === null) {
 			ctx.logger?.warn?.("[dsh-agent-commander] node-pty unavailable — agent spawn disabled");
 		}
-		this.baseCwd = typeof config.baseCwd === "string" && config.baseCwd !== "" ? config.baseCwd : process.cwd();
+		// Normalize the validated config (the loader already filled schema
+		// defaults, but the class must stay robust when driven directly).
+		this.cfg = {
+			maxAgents: Number.isFinite(config.maxAgents) && config.maxAgents > 0 ? config.maxAgents : MAX_AGENTS_DEFAULT,
+			transcriptLimit: Number.isFinite(config.transcriptLimit) && config.transcriptLimit > 0 ? config.transcriptLimit : TRANSCRIPT_LIMIT,
+			bodyLimit: Number.isFinite(config.bodyLimit) && config.bodyLimit > 0 ? config.bodyLimit : BODY_LIMIT,
+			wsInputLimit: Number.isFinite(config.wsInputLimit) && config.wsInputLimit > 0 ? config.wsInputLimit : WS_INPUT_LIMIT,
+			allowedSignals: Array.isArray(config.allowedSignals) && config.allowedSignals.length > 0 ? config.allowedSignals : [...ALLOWED_SIGNALS],
+			rolePresets: Array.isArray(config.rolePresets) && config.rolePresets.length > 0 ? config.rolePresets : [...ROLE_PRESETS],
+			baseCwd: typeof config.baseCwd === "string" && config.baseCwd !== "" ? config.baseCwd : process.cwd(),
+			memoryDir: typeof config.memoryDir === "string" && config.memoryDir !== "" ? config.memoryDir : MEMORY_DIR
+		};
+		this.baseCwd = this.cfg.baseCwd;
+		this.memoryDir = this.cfg.memoryDir;
 		// 项目根目录 = 创建智能体时所在会话的工作目录。所有智能体配置收拢到
-		// 项目根 .deepseek/agents.json（即使智能体 cwd 是子目录），保证配置
+		// 项目根 <memoryDir>/agents.json（即使智能体 cwd 是子目录），保证配置
 		// 都在用户所指的项目根目录下。
 		this.projectRootOf = (handle) => {
 			const sessionId = handle?.sessionId;
@@ -2097,21 +2201,25 @@ export class AgentCommanderService extends Service {
 		};
 		// Per-project memory stores: one SQLite knowledge base per working
 		// directory, so the plugin tools and the agents read/write the SAME
-		// .deepseek/memory.db of whichever project they operate in.
+		// <memoryDir>/memory.db of whichever project they operate in.
 		this.stores = new Map();
-		this.baseStore = new MemoryStore(this.baseCwd);
+		this.baseStore = new MemoryStore(this.baseCwd, this.memoryDir);
 		this.stores.set(this.baseCwd, this.baseStore);
-		this.registry = new AgentRegistry(this.nodePty, config.maxAgents ?? MAX_AGENTS_DEFAULT, this.baseCwd, (cwd) => this.storeFor(cwd), (handle) => this.projectRootOf(handle));
+		this.registry = new AgentRegistry(this.nodePty, this.cfg.maxAgents, this.baseCwd, (cwd) => this.storeFor(cwd), (handle) => this.projectRootOf(handle), {
+			transcriptLimit: this.cfg.transcriptLimit,
+			allowedSignals: this.cfg.allowedSignals,
+			memoryDir: this.memoryDir
+		});
 		const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts);
 		const resolveCwd = (sessionId) => sessionCwdOf(ctx, sessionId);
-		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd);
-		registerWebsockets(ctx, this.registry, fence);
+		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd, this.cfg);
+		registerWebsockets(ctx, this.registry, fence, this.cfg);
 		let toolsDisposers = null;
 		if (this.nodePty !== null) {
 			toolsDisposers = registerTools(ctx, this.registry, (cwd) => this.storeFor(cwd), resolveCwd);
 		}
 		// Restore agents that were open before the app restarted (state saved in
-		// .deepseek/agents.json on shutdown).
+		// <memoryDir>/agents.json on shutdown).
 		if (this.nodePty !== null) {
 			this.registry.restoreState();
 		}
@@ -2127,7 +2235,7 @@ export class AgentCommanderService extends Service {
 		const key = typeof cwd === "string" && cwd !== "" ? cwd : this.baseCwd;
 		let store = this.stores.get(key);
 		if (store === void 0) {
-			store = new MemoryStore(key);
+			store = new MemoryStore(key, this.memoryDir);
 			this.stores.set(key, store);
 		}
 		return store;
@@ -2178,12 +2286,17 @@ export class AgentCommanderService extends Service {
 		add: (entry, cwd) => ({ id: this.storeFor(cwd).addMemory(entry) }),
 		list: (namespace, limit, cwd) => this.storeFor(cwd).listMemory(namespace, limit)
 	};
-	/** Raw config snapshot. */
+	/** Raw config snapshot (normalized; matches the fields of the exported Config schema). */
 	get config() {
 		return {
 			maxAgents: this.registry.maxAgents,
+			transcriptLimit: this.registry.transcriptLimit,
+			bodyLimit: this.cfg.bodyLimit,
+			wsInputLimit: this.cfg.wsInputLimit,
+			allowedSignals: this.registry.allowedSignals,
+			rolePresets: this.cfg.rolePresets,
 			baseCwd: this.baseCwd,
-			rolePresets: ROLE_PRESETS
+			memoryDir: this.memoryDir
 		};
 	}
 }
@@ -2193,7 +2306,12 @@ export const name = "dsh-agent-commander";
 /** Services required before mounting. */
 export const inject = ["webServer", "sessions", "webRuntime", "tools"];
 
-/** Standard plugin entry: function form delegating to the Service class. */
+/**
+ * Standard plugin entry: function form delegating to the Service class.
+ * `config` is validated + defaulted by the exported `Config` schema — the
+ * loader fills in defaults, so unknown fields fail loudly at mount time
+ * instead of being silently ignored.
+ */
 export function apply(ctx, config = {}) {
 	return new AgentCommanderService(ctx, config);
 }
