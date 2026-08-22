@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-commander",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH web plugin: multi-agent commander. Open Claude / opencode / codex agents with role & skill definitions, watch every agent's live terminal in a right-side radar panel, and let DeepSeek dispatch tasks through agent_* tools. Shared memory: 记忆库.md / 任务看板.md / 交接区 in the project directory.",
   "type": "module",
   "main": "lib/index.js",
@@ -17,11 +17,15 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/client.js",
+    "lib",
+    "skill",
     "cordis.patch.yml",
     "README.md"
   ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "prepare": "node scripts/build-client.mjs"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -29,6 +33,18 @@
     "node-pty": "^1.1.0",
     "ws": "^8.18.0"
   },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "bundle",
+    "multi-agent",
+    "agent-commander",
+    "claude",
+    "opencode",
+    "codex",
+    "terminal"
+  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
