@@ -22,7 +22,7 @@ if (typeof document !== "undefined" && document.querySelector("style[data-plugin
 //#endregion
 
 //#region dsh-agent-commander css: dsh-agent-commander/panel.css
-const panelCss = "/* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */\n.dhac_toggleCluster {\n\tz-index: 2147483646;\n\tposition: fixed;\n\ttop: 10px;\n\tright: 12px;\n\tdisplay: flex;\n\tflex-direction: row;\n\tgap: 4px;\n\ttransition: right 0.18s var(--ds-ease-in-out, ease);\n}\n/* Desktop app: sit below the native title-bar strip so the button stays\n   clickable (the strip is a window drag region, not a button surface). */\nhtml[data-dsh-desktop=\"true\"] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-desktop-titlebar-inset, 40px) + 8px);\n}\nbody[data-dsh-title-bar-compat] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-title-bar-strip, 40px) + 8px);\n}\n.dhac_toggleButton {\n\t-webkit-app-region: no-drag;\n\theight: 32px;\n\tpadding: 0 12px;\n\tgap: 6px;\n\tcolor: var(--dsw-alias-label-secondary, #aaa);\n\tcursor: pointer;\n\tbackground: var(--dsw-alias-bg-layer-1, #222);\n\tborder: 1px solid var(--dsw-alias-border-l2, #555);\n\tborder-radius: 999px;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tbox-shadow: 0 2px 10px rgba(0,0,0,0.35);\n\ttransition: background 0.15s, color 0.15s, transform 0.1s, border-radius 0.18s, width 0.18s;\n}\n.dhac_toggleIcon {\n\tfont-size: 15px;\n\tline-height: 1;\n}\n.dhac_toggleLabel {\n\twhite-space: nowrap;\n}\n.dhac_toggleButton:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover, #333);\n\tcolor: var(--dsw-alias-label-primary, #fff);\n\ttransform: scale(1.05);\n}\n.dhac_toggleButton:active {\n\ttransform: scale(0.95);\n}\n/* Panel open: compact icon-only circle docked to the details-column edge. */\n.dhac_toggleCluster_open .dhac_toggleButton {\n\twidth: 32px;\n\tpadding: 0;\n\tborder-radius: 50%;\n}\n.dhac_toggleCluster_open .dhac_toggleLabel {\n\tdisplay: none;\n}\n.dhac_root {\n\theight: 100%;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_header {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tmin-height: 38px;\n\tpadding: 0 8px 0 12px;\n\tdisplay: flex;\n}\n.dhac_headerTitle {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xs-strong-13);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_workspace {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-secondary);\n\twhite-space: nowrap;\n\tflex: none;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding: 3px 12px 5px;\n\tcursor: default;\n}\n.dhac_count {\n\tmin-width: 18px;\n\theight: 16px;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-secondary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 8px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tpadding: 0 5px;\n}\n.dhac_iconButton {\n\twidth: 26px;\n\theight: 26px;\n\tcolor: var(--dsw-alias-label-secondary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 14px;\n}\n.dhac_iconButton:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_iconButton:disabled {\n\topacity: 0.4;\n\tcursor: default;\n}\n.dhac_addButton {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\theight: 24px;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 0 10px;\n\tdisplay: inline-flex;\n}\n.dhac_addButton:hover {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_body {\n\tflex: 1;\n\tmin-height: 0;\n\toverflow-y: auto;\n\tpadding: 4px 6px 8px;\n}\n.dhac_empty {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\ttext-align: center;\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 120px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n}\n.dhac_emptyHint {\n\topacity: 0.85;\n}\n.dhac_agent {\n\tborder: 1px solid transparent;\n\tcursor: pointer;\n\ttext-align: left;\n\tbackground: none;\n\twidth: 100%;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\talign-items: stretch;\n\tgap: 2px;\n\tmargin: 2px 0;\n\tpadding: 6px 8px;\n\tdisplay: flex;\n}\n.dhac_agent:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_agentActive {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tborder-color: var(--dsw-alias-border-l1);\n}\n.dhac_agentTop {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tdisplay: flex;\n}\n.dhac_statusDot {\n\tborder-radius: 50%;\n\tflex: none;\n\twidth: 7px;\n\theight: 7px;\n}\n.dhac_statusDot[data-status=\"working\"] {\n\tbackground: var(--dsw-alias-state-warn-primary);\n\tbox-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);\n\tanimation: dhacPulse 1.6s ease-in-out infinite;\n}\n.dhac_statusDot[data-status=\"idle\"] {\n\tbackground: var(--dsw-alias-state-success-primary);\n}\n.dhac_statusDot[data-status=\"blocked\"] {\n\tbackground: var(--dsw-alias-state-error-primary);\n}\n.dhac_statusDot[data-status=\"exited\"] {\n\tbackground: var(--dsw-alias-label-tertiary);\n}\n@keyframes dhacPulse {\n\t50% {\n\t\topacity: 0.35;\n\t}\n}\n.dhac_agentName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_agentType {\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 4px;\n\tflex: none;\n\tpadding: 1px 5px;\n}\n.dhac_agentRole {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\twhite-space: nowrap;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding-left: 13px;\n}\n.dhac_agentMeta {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tpadding-left: 13px;\n}\n.dhac_toolbar {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 36px;\n\tpadding: 0 8px;\n\tdisplay: flex;\n}\n.dhac_toolbarName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_terminalWrap {\n\tflex: 1;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_terminal {\n\tflex: 1;\n\tmin-height: 0;\n\tpadding: 6px 4px 6px 8px;\n}\n.dhac_terminal .xterm {\n\theight: 100%;\n}\n.dhac_terminalBanner {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tpadding: 2px 10px;\n\tdisplay: flex;\n}\n.dhac_modal {\n\tposition: fixed;\n\tinset: 0;\n\tz-index: 1000;\n\tbackground: rgb(0 0 0 / 45%);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_dialog {\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv3);\n\twidth: min(440px, calc(100vw - 48px));\n\tmax-height: calc(100vh - 96px);\n\tborder-radius: 12px;\n\tflex-direction: column;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_dialogTitle {\n\tfont: var(--dsw-font-s-strong-14);\n\tcolor: var(--dsw-alias-label-primary);\n\tflex: none;\n\tpadding: 14px 16px 8px;\n}\n.dhac_dialogBody {\n\tflex: 1;\n\tmin-height: 0;\n\tgap: 10px;\n\toverflow-y: auto;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 4px 16px 12px;\n}\n.dhac_field {\n\tflex-direction: column;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_fieldLabel {\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-secondary);\n}\n.dhac_input,\n.dhac_textarea,\n.dhac_select {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\twidth: 100%;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-12);\n\tborder-radius: 6px;\n\tpadding: 6px 8px;\n\tbox-sizing: border-box;\n}\n.dhac_input:focus,\n.dhac_textarea:focus,\n.dhac_select:focus {\n\tborder-color: var(--dsw-alias-border-l2);\n\toutline: none;\n}\n.dhac_textarea {\n\tmin-height: 64px;\n\tresize: vertical;\n\tline-height: 1.5;\n}\n.dhac_presets {\n\tflex-wrap: wrap;\n\talign-items: center;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_preset {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 999px;\n\tflex: none;\n\tpadding: 2px 8px;\n}\n.dhac_preset:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_skills {\n\tflex-wrap: wrap;\n\tgap: 4px;\n\tmax-height: 96px;\n\talign-items: center;\n\toverflow-y: auto;\n\tdisplay: flex;\n}\n.dhac_skill {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 2px 8px;\n\tdisplay: inline-flex;\n}\n.dhac_skillSelected {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tcolor: var(--dsw-alias-label-primary);\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_skill input {\n\taccent-color: var(--dsw-alias-brand-primary);\n\tmargin: 0;\n}\n.dhac_dialogActions {\n\tborder-top: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tjustify-content: flex-end;\n\tpadding: 10px 16px;\n\tdisplay: flex;\n}\n.dhac_btn {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\theight: 28px;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\tpadding: 0 14px;\n}\n.dhac_btn:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_btn:disabled {\n\topacity: 0.45;\n\tcursor: default;\n}\n.dhac_btnPrimary {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\tborder-color: transparent;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n}\n.dhac_btnPrimary:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_error {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-state-error-primary);\n}\n.dhac_hint {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tline-height: 1.5;\n}\n\n/* ---- live terminal cards ---- */\n.dhac_cards {\n\tflex-direction: column;\n\tgap: 8px;\n\tdisplay: flex;\n}\n.dhac_card {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tcursor: pointer;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tmin-width: 0;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_card:hover {\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_cardHeader {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tflex: none;\n\tpadding: 4px 6px 4px 8px;\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tdisplay: flex;\n}\n.dhac_cardClose {\n\twidth: 20px;\n\theight: 20px;\n\tcolor: var(--dsw-alias-label-tertiary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 4px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 11px;\n}\n.dhac_cardClose:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_miniTermWrap {\n\theight: 148px;\n\tflex: none;\n\tpadding: 2px 4px 2px 6px;\n\tposition: relative;\n}\n.dhac_miniTerm {\n\twidth: 100%;\n\theight: 100%;\n}\n.dhac_miniTerm .xterm {\n\theight: 100%;\n}\n.dhac_cardExited {\n\theight: 148px;\n\tflex: none;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_terminalDead {\n\tflex: 1;\n\tmin-height: 0;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 8px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n\ttext-align: center;\n}\n.dhac_terminalDeadHint {\n\topacity: 0.85;\n}\n\n/* ---- resize handle + status toasts ---- */\n.dhac_resizeHandle {\n\tcursor: col-resize;\n\ttouch-action: none;\n\tz-index: 3;\n\twidth: 8px;\n\tposition: absolute;\n\ttop: 0;\n\tbottom: 0;\n\tleft: -4px;\n}\n.dhac_resizeHandle:hover,\n.dhac_resizeHandle:active {\n\tbackground: var(--dsw-alias-interactive-bg-hover-accent);\n}\n.dhac_toasts {\n\tz-index: 30;\n\tpointer-events: none;\n\tgap: 6px;\n\tflex-direction: column;\n\talign-items: center;\n\tdisplay: flex;\n\tposition: absolute;\n\tbottom: 12px;\n\tleft: 8px;\n\tright: 8px;\n}\n.dhac_toast {\n\tpointer-events: auto;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-primary);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv1);\n\tmax-width: 100%;\n\tborder-radius: 8px;\n\tpadding: 6px 10px;\n\twhite-space: normal;\n}\n.dhac_toast_done {\n\tborder-color: var(--dsw-alias-state-success-primary);\n}\n.dhac_toast_exit {\n\tborder-color: var(--dsw-alias-label-tertiary);\n}\n.dhac_toast_create {\n\tborder-color: var(--dsw-alias-state-business-primary);\n}\n\n/* ---- cache dialog ---- */\n.dhac_cacheRow {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tgap: 2px;\n\tpadding: 8px 10px;\n\tdisplay: flex;\n}\n.dhac_cachePaths {\n\tflex-direction: column;\n\tgap: 1px;\n\tdisplay: flex;\n}\n.dhac_cachePath {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tword-break: break-all;\n}\n";
+const panelCss = "/* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */\n/* Standard SVG icons (Lucide-style, stroke-based, currentColor). */\n.dhac_icon {\n\tflex: none;\n\tdisplay: inline-block;\n\tvertical-align: -0.125em;\n}\n.dhac_inlineIcon {\n\tvertical-align: -0.15em;\n\tmargin-right: 3px;\n}\n.dhac_spin {\n\tanimation: dhacSpin 1s linear infinite;\n}\n@keyframes dhacSpin {\n\tto {\n\t\ttransform: rotate(360deg);\n\t}\n}\n.dhac_toggleCluster {\n\tz-index: 2147483646;\n\tposition: fixed;\n\ttop: 10px;\n\tright: 12px;\n\tdisplay: flex;\n\tflex-direction: row;\n\tgap: 4px;\n\ttransition: right 0.18s var(--ds-ease-in-out, ease);\n}\n/* Desktop app: sit below the native title-bar strip so the button stays\n   clickable (the strip is a window drag region, not a button surface). */\nhtml[data-dsh-desktop=\"true\"] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-desktop-titlebar-inset, 40px) + 8px);\n}\nbody[data-dsh-title-bar-compat] .dhac_toggleCluster {\n\ttop: calc(var(--dsh-title-bar-strip, 40px) + 8px);\n}\n.dhac_toggleButton {\n\t-webkit-app-region: no-drag;\n\theight: 32px;\n\tpadding: 0 12px;\n\tgap: 6px;\n\tcolor: var(--dsw-alias-label-secondary, #aaa);\n\tcursor: pointer;\n\tbackground: var(--dsw-alias-bg-layer-1, #222);\n\tborder: 1px solid var(--dsw-alias-border-l2, #555);\n\tborder-radius: 999px;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tbox-shadow: 0 2px 10px rgba(0,0,0,0.35);\n\ttransition: background 0.15s, color 0.15s, transform 0.1s, border-radius 0.18s, width 0.18s;\n}\n.dhac_toggleIcon {\n\tdisplay: inline-flex;\n\talign-items: center;\n\tjustify-content: center;\n\tline-height: 1;\n}\n.dhac_toggleLabel {\n\twhite-space: nowrap;\n}\n.dhac_toggleButton:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover, #333);\n\tcolor: var(--dsw-alias-label-primary, #fff);\n\ttransform: scale(1.05);\n}\n.dhac_toggleButton:active {\n\ttransform: scale(0.95);\n}\n/* Panel open: compact icon-only circle docked to the details-column edge. */\n.dhac_toggleCluster_open .dhac_toggleButton {\n\twidth: 32px;\n\tpadding: 0;\n\tborder-radius: 50%;\n}\n.dhac_toggleCluster_open .dhac_toggleLabel {\n\tdisplay: none;\n}\n.dhac_root {\n\theight: 100%;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_header {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tmin-height: 38px;\n\tpadding: 0 8px 0 12px;\n\tdisplay: flex;\n}\n.dhac_headerTitle {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xs-strong-13);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_workspace {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-secondary);\n\twhite-space: nowrap;\n\tflex: none;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding: 3px 12px 5px;\n\tcursor: default;\n}\n.dhac_count {\n\tmin-width: 18px;\n\theight: 16px;\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-secondary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 8px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: inline-flex;\n\tpadding: 0 5px;\n}\n.dhac_iconButton {\n\twidth: 26px;\n\theight: 26px;\n\tcolor: var(--dsw-alias-label-secondary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 14px;\n}\n.dhac_iconButton:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_iconButton:disabled {\n\topacity: 0.4;\n\tcursor: default;\n}\n.dhac_addButton {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\theight: 24px;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder: none;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 0 10px;\n\tdisplay: inline-flex;\n}\n.dhac_addButton:hover {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_body {\n\tflex: 1;\n\tmin-height: 0;\n\toverflow-y: auto;\n\tpadding: 4px 6px 8px;\n}\n.dhac_empty {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\ttext-align: center;\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 120px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n}\n.dhac_emptyHint {\n\topacity: 0.85;\n}\n.dhac_agent {\n\tborder: 1px solid transparent;\n\tcursor: pointer;\n\ttext-align: left;\n\tbackground: none;\n\twidth: 100%;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\talign-items: stretch;\n\tgap: 2px;\n\tmargin: 2px 0;\n\tpadding: 6px 8px;\n\tdisplay: flex;\n}\n.dhac_agent:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_agentActive {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tborder-color: var(--dsw-alias-border-l1);\n}\n.dhac_agentTop {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tdisplay: flex;\n}\n.dhac_statusDot {\n\tborder-radius: 50%;\n\tflex: none;\n\twidth: 7px;\n\theight: 7px;\n}\n.dhac_statusDot[data-status=\"working\"] {\n\tbackground: var(--dsw-alias-state-warn-primary);\n\tbox-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);\n\tanimation: dhacPulse 1.6s ease-in-out infinite;\n}\n.dhac_statusDot[data-status=\"idle\"] {\n\tbackground: var(--dsw-alias-state-success-primary);\n}\n.dhac_statusDot[data-status=\"blocked\"] {\n\tbackground: var(--dsw-alias-state-error-primary);\n}\n.dhac_statusDot[data-status=\"closing\"] {\n\tbackground: var(--dsw-alias-label-tertiary);\n\tanimation: dhacPulse 1.2s ease-in-out infinite;\n}\n.dhac_statusDot[data-status=\"exited\"] {\n\tbackground: var(--dsw-alias-label-tertiary);\n}\n@keyframes dhacPulse {\n\t50% {\n\t\topacity: 0.35;\n\t}\n}\n.dhac_agentName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_agentType {\n\tfont: var(--dsw-font-xxxs-strong-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tborder-radius: 4px;\n\tflex: none;\n\tpadding: 1px 5px;\n}\n.dhac_agentRole {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\twhite-space: nowrap;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding-left: 13px;\n}\n.dhac_agentMeta {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tpadding-left: 13px;\n}\n.dhac_briefing {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-state-warn-primary);\n\twhite-space: nowrap;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n\tpadding-left: 13px;\n\tanimation: dhacPulse 1.6s ease-in-out infinite;\n}\n.dhac_briefingFailed {\n\tcolor: var(--dsw-alias-state-error-primary);\n\tanimation: none;\n}\n.dhac_toolbar {\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tmin-height: 36px;\n\tpadding: 0 8px;\n\tdisplay: flex;\n}\n.dhac_toolbarName {\n\tmin-width: 0;\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-primary);\n\twhite-space: nowrap;\n\tflex: 1;\n\toverflow: hidden;\n\ttext-overflow: ellipsis;\n}\n.dhac_terminalWrap {\n\tflex: 1;\n\tmin-height: 0;\n\tbackground: var(--dsw-alias-bg-base);\n\tflex-direction: column;\n\tdisplay: flex;\n\tposition: relative;\n}\n.dhac_terminal {\n\tflex: 1;\n\tmin-height: 0;\n\tpadding: 6px 4px 6px 8px;\n}\n.dhac_terminal .xterm {\n\theight: 100%;\n}\n.dhac_terminalBanner {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 6px;\n\tpadding: 2px 10px;\n\tdisplay: flex;\n}\n.dhac_termDot {\n\twidth: 7px;\n\theight: 7px;\n\tborder-radius: 50%;\n\tflex: none;\n\tbackground: var(--dsw-alias-label-tertiary);\n\tanimation: dhacPulse 1.2s ease-in-out infinite;\n}\n.dhac_termDotOn {\n\tbackground: var(--dsw-alias-state-success-primary);\n\tbox-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent);\n\tanimation: none;\n}\n.dhac_modal {\n\tposition: fixed;\n\tinset: 0;\n\tz-index: 1000;\n\tbackground: rgb(0 0 0 / 45%);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_dialog {\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv3);\n\twidth: min(440px, calc(100vw - 48px));\n\tmax-height: calc(100vh - 96px);\n\tborder-radius: 12px;\n\tflex-direction: column;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_dialogTitle {\n\tfont: var(--dsw-font-s-strong-14);\n\tcolor: var(--dsw-alias-label-primary);\n\tflex: none;\n\tpadding: 14px 16px 8px;\n}\n.dhac_dialogBody {\n\tflex: 1;\n\tmin-height: 0;\n\tgap: 10px;\n\toverflow-y: auto;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 4px 16px 12px;\n}\n.dhac_field {\n\tflex-direction: column;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_fieldLabel {\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcolor: var(--dsw-alias-label-secondary);\n}\n.dhac_input,\n.dhac_textarea,\n.dhac_select {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\twidth: 100%;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-12);\n\tborder-radius: 6px;\n\tpadding: 6px 8px;\n\tbox-sizing: border-box;\n}\n.dhac_input:focus,\n.dhac_textarea:focus,\n.dhac_select:focus {\n\tborder-color: var(--dsw-alias-border-l2);\n\toutline: none;\n}\n.dhac_textarea {\n\tmin-height: 64px;\n\tresize: vertical;\n\tline-height: 1.5;\n}\n.dhac_presets {\n\tflex-wrap: wrap;\n\talign-items: center;\n\tgap: 4px;\n\tdisplay: flex;\n}\n.dhac_preset {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 999px;\n\tflex: none;\n\tpadding: 2px 8px;\n}\n.dhac_preset:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_skills {\n\tflex-wrap: wrap;\n\tgap: 4px;\n\tmax-height: 96px;\n\talign-items: center;\n\toverflow-y: auto;\n\tdisplay: flex;\n}\n.dhac_skill {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tcolor: var(--dsw-alias-label-secondary);\n\tfont: var(--dsw-font-xxxs-11);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\talign-items: center;\n\tgap: 4px;\n\tpadding: 2px 8px;\n\tdisplay: inline-flex;\n}\n.dhac_skillSelected {\n\tbackground: var(--dsw-alias-interactive-bg-active);\n\tcolor: var(--dsw-alias-label-primary);\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_skill input {\n\taccent-color: var(--dsw-alias-brand-primary);\n\tmargin: 0;\n}\n.dhac_dialogActions {\n\tborder-top: 1px solid var(--dsw-alias-border-l1);\n\tflex: none;\n\talign-items: center;\n\tgap: 8px;\n\tjustify-content: flex-end;\n\tpadding: 10px 16px;\n\tdisplay: flex;\n}\n.dhac_btn {\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\theight: 28px;\n\tcolor: var(--dsw-alias-label-primary);\n\tfont: var(--dsw-font-xxs-strong-12);\n\tcursor: pointer;\n\tborder-radius: 6px;\n\tflex: none;\n\tpadding: 0 14px;\n}\n.dhac_btn:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n}\n.dhac_btn:disabled {\n\topacity: 0.45;\n\tcursor: default;\n}\n.dhac_btnPrimary {\n\tbackground: var(--dsw-alias-button-primary-fill);\n\tborder-color: transparent;\n\tcolor: var(--dsw-alias-label-primary-inverted);\n}\n.dhac_btnPrimary:hover:not(:disabled) {\n\tbackground: var(--dsw-alias-button-primary-hover);\n}\n.dhac_error {\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-state-error-primary);\n}\n.dhac_hint {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tline-height: 1.5;\n}\n\n/* ---- live terminal cards ---- */\n.dhac_cards {\n\tflex-direction: column;\n\tgap: 8px;\n\tdisplay: flex;\n}\n.dhac_card {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-layer-1);\n\tcursor: pointer;\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tmin-width: 0;\n\tdisplay: flex;\n\toverflow: hidden;\n}\n.dhac_card:hover {\n\tborder-color: var(--dsw-alias-border-l2);\n}\n.dhac_cardHeader {\n\talign-items: center;\n\tgap: 6px;\n\tmin-width: 0;\n\tflex: none;\n\tpadding: 4px 6px 4px 8px;\n\tborder-bottom: 1px solid var(--dsw-alias-border-l1);\n\tdisplay: flex;\n}\n.dhac_cardClose {\n\twidth: 20px;\n\theight: 20px;\n\tcolor: var(--dsw-alias-label-tertiary);\n\tcursor: pointer;\n\tbackground: none;\n\tborder: none;\n\tborder-radius: 4px;\n\tflex: none;\n\tjustify-content: center;\n\talign-items: center;\n\tpadding: 0;\n\tdisplay: inline-flex;\n\tfont-size: 11px;\n}\n.dhac_cardClose:hover {\n\tbackground: var(--dsw-alias-interactive-bg-hover);\n\tcolor: var(--dsw-alias-label-primary);\n}\n.dhac_miniTermWrap {\n\theight: 148px;\n\tflex: none;\n\tpadding: 2px 4px 2px 6px;\n\tposition: relative;\n}\n.dhac_miniTerm {\n\twidth: 100%;\n\theight: 100%;\n}\n.dhac_miniTerm .xterm {\n\theight: 100%;\n}\n.dhac_cardExited {\n\theight: 148px;\n\tflex: none;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tdisplay: flex;\n}\n.dhac_terminalDead {\n\tflex: 1;\n\tmin-height: 0;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tjustify-content: center;\n\talign-items: center;\n\tgap: 8px;\n\tflex-direction: column;\n\tdisplay: flex;\n\tpadding: 16px;\n\ttext-align: center;\n}\n.dhac_terminalDeadHint {\n\topacity: 0.85;\n}\n\n/* ---- resize handle + status toasts ---- */\n.dhac_resizeHandle {\n\tcursor: col-resize;\n\ttouch-action: none;\n\tz-index: 3;\n\twidth: 8px;\n\tposition: absolute;\n\ttop: 0;\n\tbottom: 0;\n\tleft: -4px;\n}\n.dhac_resizeHandle:hover,\n.dhac_resizeHandle:active {\n\tbackground: var(--dsw-alias-interactive-bg-hover-accent);\n}\n.dhac_toasts {\n\tz-index: 30;\n\tpointer-events: none;\n\tgap: 6px;\n\tflex-direction: column;\n\talign-items: center;\n\tdisplay: flex;\n\tposition: absolute;\n\tbottom: 12px;\n\tleft: 8px;\n\tright: 8px;\n}\n.dhac_toast {\n\tpointer-events: auto;\n\tfont: var(--dsw-font-xxs-12);\n\tcolor: var(--dsw-alias-label-primary);\n\tbackground: var(--dsw-alias-bg-layer-2);\n\tborder: 1px solid var(--dsw-alias-border-l2);\n\tbox-shadow: var(--dsw-shadow-lv1);\n\tmax-width: 100%;\n\tborder-radius: 8px;\n\tpadding: 6px 10px;\n\twhite-space: normal;\n}\n.dhac_toast_done {\n\tborder-color: var(--dsw-alias-state-success-primary);\n}\n.dhac_toast_exit {\n\tborder-color: var(--dsw-alias-label-tertiary);\n}\n.dhac_toast_create {\n\tborder-color: var(--dsw-alias-state-business-primary);\n}\n\n/* ---- cache dialog ---- */\n.dhac_cacheRow {\n\tborder: 1px solid var(--dsw-alias-border-l1);\n\tbackground: var(--dsw-alias-bg-base);\n\tborder-radius: 8px;\n\tflex-direction: column;\n\tgap: 2px;\n\tpadding: 8px 10px;\n\tdisplay: flex;\n}\n.dhac_cachePaths {\n\tflex-direction: column;\n\tgap: 1px;\n\tdisplay: flex;\n}\n.dhac_cachePath {\n\tfont: var(--dsw-font-xxxs-11);\n\tcolor: var(--dsw-alias-label-tertiary);\n\tword-break: break-all;\n}\n";
 const panelCssTagId = "dsh-agent-commander/panel.css";
 if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(panelCssTagId) + "]") === null) {
 	const tag = document.createElement("style");
@@ -7299,6 +7299,53 @@ const { useEffect, useState, useRef, useCallback } = react;
 const h = react.createElement;
 
 // ---------------------------------------------------------------------------
+// Standard icon set — inline Lucide-style SVGs (stroke-based, currentColor).
+// Self-contained so the single-file client bundle needs no icon dependency.
+// Each entry: name → array of [tagName, attrs] describing the 24×24 glyph.
+// ---------------------------------------------------------------------------
+const ICON_PATHS = {
+	"x": [["path", { d: "M18 6 6 18" }], ["path", { d: "m6 6 12 12" }]],
+	"power": [["path", { d: "M12 2v10" }], ["path", { d: "M18.4 6.6a9 9 0 1 1-12.77.04" }]],
+	"rotate-ccw": [["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }], ["path", { d: "M3 3v5h5" }]],
+	"refresh-cw": [["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" }], ["path", { d: "M21 3v5h-5" }], ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" }], ["path", { d: "M8 16H3v5" }]],
+	"minimize": [["path", { d: "m14 10 7-7" }], ["path", { d: "M20 10h-6V4" }], ["path", { d: "m3 21 7-7" }], ["path", { d: "M4 14h6v6" }]],
+	"folder": [["path", { d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" }]],
+	"clock": [["circle", { cx: 12, cy: 12, r: 10 }], ["path", { d: "M12 6v6l4 2" }]],
+	"alert": [["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" }], ["path", { d: "M12 9v4" }], ["path", { d: "M12 17h.01" }]],
+	"chevron-left": [["path", { d: "m15 18-6-6 6-6" }]],
+	"plus": [["path", { d: "M5 12h14" }], ["path", { d: "M12 5v14" }]],
+	"stop": [["rect", { x: 3, y: 3, width: 18, height: 18, rx: 2, fill: "currentColor", stroke: "none" }]],
+	"bot": [["path", { d: "M12 8V4H8" }], ["rect", { width: 16, height: 12, x: 4, y: 8, rx: 2 }], ["path", { d: "M2 14h2" }], ["path", { d: "M20 14h2" }], ["path", { d: "M15 13v2" }], ["path", { d: "M9 13v2" }]]
+};
+
+function Icon({ name, size = 14, className = "" }) {
+	const parts = ICON_PATHS[name] || [];
+	if (parts.length === 0) return null;
+	return h("svg", {
+		className: `dhac_icon${className ? " " + className : ""}`,
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: 2,
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true"
+	}, parts.map(([tag, attrs], i) => h(tag, { key: i, ...attrs })));
+}
+
+// HTML string variant for imperatively-built DOM (toggle button).
+function iconSvgMarkup(name, size = 15) {
+	const parts = ICON_PATHS[name] || [];
+	const inner = parts.map(([tag, attrs]) => {
+		const attrStr = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(" ");
+		return `<${tag} ${attrStr}></${tag}>`;
+	}).join("");
+	return `<svg class="dhac_icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+}
+
+// ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
 const API_BASE = "/agent-commander/api";
@@ -7343,11 +7390,18 @@ function setAgents(next) {
 function getAgents() {
 	return agentSnapshot;
 }
+let subscriberCount = 0;
 function subscribeAgents(fn) {
+	subscriberCount++;
 	agentListeners.add(fn);
 	fn(agentSnapshot);
 	return () => {
 		agentListeners.delete(fn);
+		subscriberCount--;
+		if (subscriberCount === 0 && listWs !== null) {
+			try { listWs.close(); } catch {}
+			listWs = null;
+		}
 	};
 }
 /** Scope the pushed agent list to a workspace folder and reconnect the WS.
@@ -7365,11 +7419,17 @@ function setListCwd(cwd) {
 	}
 	connectListWs();
 }
+let connecting = false;
 function connectListWs() {
+	if (connecting) return;
 	if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) return;
+	connecting = true;
 	let ws;
 	const open = () => {
-		if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) return;
+		if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) {
+			connecting = false;
+			return;
+		}
 		const qs = listCwd !== void 0 ? `?cwd=${encodeURIComponent(listCwd)}` : "";
 		ws = new WebSocket(wsUrl(`/agent-commander/ws/list${qs}`));
 		listWs = ws;
@@ -7380,6 +7440,7 @@ function connectListWs() {
 		};
 		ws.onclose = () => {
 			if (listWs === ws) listWs = null;
+			connecting = false;
 			setTimeout(open, 2000);
 		};
 		ws.onerror = () => {
@@ -7398,6 +7459,7 @@ const STATUS_LABEL = {
 	working: "工作中",
 	idle: "空闲",
 	blocked: "受阻",
+	closing: "退出中…",
 	exited: "已退出"
 };
 
@@ -7535,6 +7597,28 @@ function getRolePresets() {
 		: DEFAULT_ROLE_PRESETS;
 }
 
+// ---------------------------------------------------------------------------
+// ResizeObserver throttle helper — shared by AgentTerminal & MiniTerminal.
+// Coalesces rapid resize events into at most one callback per 200ms window.
+// ---------------------------------------------------------------------------
+function makeThrottledResizeObserver(callbacks) {
+	let throttleTimer = null;
+	const observer = new ResizeObserver(() => {
+		if (throttleTimer !== null) return;
+		throttleTimer = setTimeout(() => {
+			throttleTimer = null;
+			for (const fn of callbacks) { try { fn(); } catch {} }
+		}, 200);
+	});
+	return {
+		observe(target) { observer.observe(target); },
+		disconnect() {
+			if (throttleTimer !== null) { clearTimeout(throttleTimer); throttleTimer = null; }
+			observer.disconnect();
+		}
+	};
+}
+
 function AgentTerminal({ agentId, signalRef }) {
 	const containerRef = useRef(null);
 	const wsRef = useRef(null);
@@ -7644,13 +7728,7 @@ function AgentTerminal({ agentId, signalRef }) {
 				ws.send(JSON.stringify({ type: "input", data }));
 			}
 		});
-		const resizeObserver = new ResizeObserver(() => {
-			try {
-				fit.fit();
-				sendResize();
-				pinToBottom();
-			} catch {}
-		});
+		const resizeObserver = makeThrottledResizeObserver([fit.fit, sendResize, pinToBottom]);
 		resizeObserver.observe(container);
 		connect();
 		return () => {
@@ -7672,11 +7750,15 @@ function AgentTerminal({ agentId, signalRef }) {
 			wsRef.current.send(JSON.stringify({ type: "signal", signal }));
 		}
 	}, []);
-	if (signalRef !== void 0) signalRef.current = sendSignal;
+	useEffect(() => {
+		if (signalRef !== void 0) signalRef.current = sendSignal;
+		return () => { if (signalRef !== void 0) signalRef.current = void 0; };
+	}, [signalRef, sendSignal]);
 
 	return h("div", { className: "dhac_terminalWrap" }, [
 		h("div", { className: "dhac_terminalBanner" }, [
-			h("span", null, connected ? "● 已连接" : "○ 连接中…"),
+			h("span", { className: `dhac_termDot${connected ? " dhac_termDotOn" : ""}` }),
+			h("span", null, connected ? "已连接" : "连接中…"),
 			h("span", { style: { flex: "1" } })
 		]),
 		h("div", { ref: containerRef, className: "dhac_terminal" })
@@ -7725,6 +7807,7 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 			onClose();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
+		} finally {
 			setBusy(false);
 		}
 	};
@@ -7890,13 +7973,7 @@ function MiniTerminal({ agentId }) {
 			};
 		};
 		connect();
-		const resizeObserver = new ResizeObserver(() => {
-			try {
-				fit.fit();
-				sendResize();
-				pinToBottom();
-			} catch {}
-		});
+		const resizeObserver = makeThrottledResizeObserver([fit.fit, sendResize, pinToBottom]);
 		resizeObserver.observe(container);
 		return () => {
 			closed = true;
@@ -7920,7 +7997,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 	if (agents.length === 0) {
 		return h("div", { className: "dhac_empty" }, [
 			h("div", null, scoped ? "本文件夹还没有智能体" : "还没有智能体"),
-			h("div", { className: "dhac_emptyHint" }, "点击右上角「＋ 新建」打开 claude / opencode / codex，或让 DeepSeek 用 agent_open 工具创建"),
+			h("div", { className: "dhac_emptyHint" }, "点击右上角「新建」打开 claude / opencode / codex，或让 DeepSeek 用 agent_open 工具创建"),
 			h("div", { className: "dhac_emptyHint" }, "智能体共享记忆：.deepseek/memory.md · task-board.md · experience.md · handoffs/")
 		]);
 	}
@@ -7946,7 +8023,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onRestore(agent.id);
 							}
-						}, "⏻"),
+						}, h(Icon, { name: "power", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -7955,7 +8032,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onForget(agent.id);
 							}
-						}, "✕")
+						}, h(Icon, { name: "x", size: 12 }))
 					])
 					: h("span", { style: { display: "contents" } }, [
 						COMPACT_SUPPORTED.has(agent.type) && h("button", {
@@ -7966,7 +8043,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onCompact(agent.id);
 							}
-						}, "🗜"),
+						}, h(Icon, { name: "minimize", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -7975,7 +8052,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onNewSession(agent.id);
 							}
-						}, "↺"),
+						}, h(Icon, { name: "rotate-ccw", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -7984,14 +8061,27 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onCloseAgent(agent.id);
 							}
-						}, "✕")
+						}, h(Icon, { name: "x", size: 12 }))
 					])
 			]),
 			agent.role !== "" && h("div", { className: "dhac_agentRole", title: agent.role }, agent.role),
+			(agent.briefing === "pending" || agent.briefing === "failed") && h("div", {
+				className: agent.briefing === "failed" ? "dhac_briefing dhac_briefingFailed" : "dhac_briefing",
+				title: "角色/技能简报会在智能体启动就绪后自动写入并回车执行"
+			}, [
+				h(Icon, { name: agent.briefing === "pending" ? "clock" : "alert", size: 11, className: "dhac_inlineIcon" }),
+				agent.briefing === "pending" ? "简报注入中（等待启动就绪后自动回车执行）…" : "简报未能确认执行，请打开终端检查"
+			]),
 			h("div", { className: "dhac_agentMeta", title: `${agent.cwd} · 会话 ${agent.sessionName ?? agent.sessionId ?? "-"}` },
 				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.restored ? " · 已恢复" : ""}`),
 			ghost
-				? h("div", { className: "dhac_cardExited" }, `未运行（恢复失败或已关闭）— ⏻ 恢复 / ✕ 删除记录`)
+				? h("div", { className: "dhac_cardExited" }, [
+					"未运行（恢复失败或已关闭）— ",
+					h(Icon, { name: "power", size: 11, className: "dhac_inlineIcon" }),
+					" 恢复 / ",
+					h(Icon, { name: "x", size: 11, className: "dhac_inlineIcon" }),
+					" 删除记录"
+				])
 				: (agent.exited
 					? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
 					: h("div", { className: "dhac_miniTermWrap" }, h(MiniTerminal, { agentId: agent.id })))
@@ -8004,20 +8094,26 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 	const ghost = agent.running === false;
 	return h("div", { className: "dhac_root" }, [
 		h("div", { className: "dhac_toolbar" }, [
-			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, "‹"),
+			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, h(Icon, { name: "chevron-left", size: 14 })),
 			h("span", { className: "dhac_toolbarName", title: `${agent.name} · ${agent.cwd}` }, `${agent.name} (${agent.type})`),
 			h("span", { className: "dhac_agentMeta" }, ghost ? "已保存·未运行" : (STATUS_LABEL[agent.status] ?? agent.status)),
-			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "重新启动该智能体（恢复会话）", onClick: () => onRestore(agent.id) }, "⏻"),
-			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, "✕"),
-			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, "🗜"),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, "↺"),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, "⏹"),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, "✕")
+			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "重新启动该智能体（恢复会话）", onClick: () => onRestore(agent.id) }, h(Icon, { name: "power", size: 13 })),
+			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 })),
+			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, h(Icon, { name: "minimize", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "rotate-ccw", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, h(Icon, { name: "stop", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 }))
 		]),
 		ghost
 			? h("div", { className: "dhac_terminalDead" }, [
 				h("div", null, "该智能体记录保存在本工作区的 .deepseek/agents.json 中，但进程未运行（恢复失败或已关闭）。"),
-				h("div", { className: "dhac_terminalDeadHint" }, "点「⏻ 恢复」重新启动；点「✕」删除该记录。")
+				h("div", { className: "dhac_terminalDeadHint" }, [
+					"点「",
+					h(Icon, { name: "power", size: 11, className: "dhac_inlineIcon" }),
+					" 恢复」重新启动；点「",
+					h(Icon, { name: "x", size: 11, className: "dhac_inlineIcon" }),
+					"」删除该记录。"
+				])
 			])
 			: (agent.exited
 				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
@@ -8198,11 +8294,17 @@ function RadarPanel(props) {
 		h("div", { className: "dhac_header" }, [
 			h("span", { className: "dhac_headerTitle" }, "智能体雷达"),
 			h("span", { className: "dhac_count" }, String(merged.length)),
-			h("button", { type: "button", className: "dhac_iconButton", title: "重新检测本文件夹的智能体列表", onClick: () => reDetect(workspaceCwd), disabled: scanning }, scanning ? "…" : "↻"),
-			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, "＋ 新建")
+			h("button", { type: "button", className: "dhac_iconButton", title: "重新检测本文件夹的智能体列表", onClick: () => reDetect(workspaceCwd), disabled: scanning },
+				h(Icon, { name: "refresh-cw", size: 13, className: scanning ? "dhac_spin" : "" })),
+			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, [
+				h(Icon, { name: "plus", size: 13 }),
+				h("span", null, "新建")
+			])
 		]),
-		h("div", { className: "dhac_workspace", title: workspaceCwd ?? "未绑定工作区（显示全部智能体）" },
-			`📁 ${workspaceLabel}${scanning ? " · 检测中…" : ""}`),
+		h("div", { className: "dhac_workspace", title: workspaceCwd ?? "未绑定工作区（显示全部智能体）" }, [
+			h(Icon, { name: "folder", size: 12, className: "dhac_inlineIcon" }),
+			h("span", null, `${workspaceLabel}${scanning ? " · 检测中…" : ""}`)
+		]),
 		h("div", { className: "dhac_toasts" },
 			toasts.map((t) =>
 				h("div", { key: t.id, className: `dhac_toast dhac_toast_${t.kind}` }, t.text))),
@@ -8363,7 +8465,7 @@ function apply(ctx) {
 			btn.title = "智能体雷达（点击弹出/收起侧边栏）";
 			const icon = document.createElement("span");
 			icon.className = "dhac_toggleIcon";
-			icon.textContent = "🤖";
+			icon.innerHTML = iconSvgMarkup("bot", 15);
 			const label = document.createElement("span");
 			label.className = "dhac_toggleLabel";
 			label.textContent = "雷达";

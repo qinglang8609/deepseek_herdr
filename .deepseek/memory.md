@@ -28,7 +28,7 @@ SQLite 是结构化查询的权威来源，Markdown 文件是人类可读视图�
 ```sql
 CREATE TABLE memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  namespace TEXT NOT NULL DEFAULT 'experience',  -- 命名空间（见下方约定）
+  namespace TEXT NOT NULL DEFAULT 'general',     -- 命名空间（见下方约定）
   title TEXT NOT NULL,                           -- 简短标题
   body TEXT NOT NULL,                            -- 内容
   tags TEXT DEFAULT '',                          -- 逗号分隔标签

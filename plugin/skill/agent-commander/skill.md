@@ -1,6 +1,6 @@
 ---
 name: agent-commander
-description: 多智能体总指挥方法论（DSH 原生版）— 用 agent_open/agent_list/agent_read/agent_send/agent_signal/agent_close 打开并指挥 claude / opencode / codex / codebuddy / pi / qwen 团队，通过 .deepseek/memory.md / task-board.md / experience.md / handoffs/ 共享记忆与任务进度，分工审查、修复、验证，实现高效任务编排
+description: 多智能体总指挥方法论（DSH 原生版）— 用 agent_open/agent_list/agent_read/agent_send/agent_broadcast/agent_signal/agent_close 打开并指挥 claude / opencode / codex / codebuddy / pi / qwen 团队，通过 .deepseek/memory.md / task-board.md / experience.md / handoffs/ 共享记忆与任务进度，分工审查、修复、验证，实现高效任务编排
 ---
 
 # 多智能体总指挥方法论（Agent Commander Pattern）
@@ -21,7 +21,8 @@ description: 多智能体总指挥方法论（DSH 原生版）— 用 agent_open
 
 ```text
 agent_list      # 查看当前有哪些智能体在线（id / 引擎 / 名称 / 角色 / 状态）
-                # 注意：结果按“当前工作区”隔离，只返回本文件夹（含子目录）的智能体；切换工作区后列表自动跟随
+                # 默认按“当前工作区”列出（含子目录）；若本文件夹没有智能体，
+                # 会自动回退列出所有工作区的智能体——跨窗口/跨会话创建的智能体同样可见可操作
 ```
 
 建立智能体清单：
@@ -83,6 +84,15 @@ agent_send <id> text="<任务描述>" submit=true
 
 ⚠️ **多行文本会让 claude 的输入框进入多行模式，最后的回车不提交** —— 派活时把任务
 写成**单行**（换行用空格代替），或先发文本、再单独补发一个空 submit=true 回车。
+
+### 3.1b 协同派活（同一任务 → 多个智能体并行）
+
+```text
+agent_broadcast ids=["<id1>","<id2>"] text="<同一任务（单行）>" submit=true
+```
+
+适合「让 claude code 和 opencode 各自分析同一项目/同一问题」这类协同场景：一条命令
+同时派给多个智能体并回车执行，各自独立完成后用 agent_read 逐个收集结果。
 
 ### 3.2 异步监控（推荐 —— 不阻塞总指挥）
 
@@ -268,9 +278,10 @@ DeepSeek 总指挥也有 mem_query / mem_add 工具直接读写。
 
 ```text
 agent_open    type=<claude|opencode|codex|codebuddy|pi|qwen> name=? role=? skills=? cwd=?  # 开智能体
-agent_list                                                               # 看在线智能体（按当前工作区隔离）
+agent_list                                                               # 看在线智能体（本工作区无则回退列出全部）
 agent_read   id=? bytes=?                                               # 读最近输出
 agent_send   id=? text=? submit=true|false                              # 派活/发消息
+agent_broadcast ids=[...] text=? submit=?                               # 同一任务并行派给多个智能体（协同）
 agent_approve id=? choice=?                                             # 确认弹窗（默认选1=Yes）
 agent_signal id=? signal=SIGINT|SIGTSTP|SIGTERM                        # 中断/暂停
 agent_close  id=?                                                       # 关闭智能体

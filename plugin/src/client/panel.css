@@ -1,4 +1,22 @@
 /* dsh-agent-commander — Agent Radar panel styles (uses DSH design tokens) */
+/* Standard SVG icons (Lucide-style, stroke-based, currentColor). */
+.dhac_icon {
+	flex: none;
+	display: inline-block;
+	vertical-align: -0.125em;
+}
+.dhac_inlineIcon {
+	vertical-align: -0.15em;
+	margin-right: 3px;
+}
+.dhac_spin {
+	animation: dhacSpin 1s linear infinite;
+}
+@keyframes dhacSpin {
+	to {
+		transform: rotate(360deg);
+	}
+}
 .dhac_toggleCluster {
 	z-index: 2147483646;
 	position: fixed;
@@ -35,7 +53,9 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	transition: background 0.15s, color 0.15s, transform 0.1s, border-radius 0.18s, width 0.18s;
 }
 .dhac_toggleIcon {
-	font-size: 15px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	line-height: 1;
 }
 .dhac_toggleLabel {
@@ -214,6 +234,10 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_statusDot[data-status="blocked"] {
 	background: var(--dsw-alias-state-error-primary);
 }
+.dhac_statusDot[data-status="closing"] {
+	background: var(--dsw-alias-label-tertiary);
+	animation: dhacPulse 1.2s ease-in-out infinite;
+}
 .dhac_statusDot[data-status="exited"] {
 	background: var(--dsw-alias-label-tertiary);
 }
@@ -251,6 +275,19 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	font: var(--dsw-font-xxxs-11);
 	color: var(--dsw-alias-label-tertiary);
 	padding-left: 13px;
+}
+.dhac_briefing {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-state-warn-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding-left: 13px;
+	animation: dhacPulse 1.6s ease-in-out infinite;
+}
+.dhac_briefingFailed {
+	color: var(--dsw-alias-state-error-primary);
+	animation: none;
 }
 .dhac_toolbar {
 	border-bottom: 1px solid var(--dsw-alias-border-l1);
@@ -297,6 +334,19 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	gap: 6px;
 	padding: 2px 10px;
 	display: flex;
+}
+.dhac_termDot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex: none;
+	background: var(--dsw-alias-label-tertiary);
+	animation: dhacPulse 1.2s ease-in-out infinite;
+}
+.dhac_termDotOn {
+	background: var(--dsw-alias-state-success-primary);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent);
+	animation: none;
 }
 .dhac_modal {
 	position: fixed;

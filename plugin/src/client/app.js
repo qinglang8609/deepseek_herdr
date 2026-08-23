@@ -18,6 +18,53 @@ const { useEffect, useState, useRef, useCallback } = react;
 const h = react.createElement;
 
 // ---------------------------------------------------------------------------
+// Standard icon set — inline Lucide-style SVGs (stroke-based, currentColor).
+// Self-contained so the single-file client bundle needs no icon dependency.
+// Each entry: name → array of [tagName, attrs] describing the 24×24 glyph.
+// ---------------------------------------------------------------------------
+const ICON_PATHS = {
+	"x": [["path", { d: "M18 6 6 18" }], ["path", { d: "m6 6 12 12" }]],
+	"power": [["path", { d: "M12 2v10" }], ["path", { d: "M18.4 6.6a9 9 0 1 1-12.77.04" }]],
+	"rotate-ccw": [["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }], ["path", { d: "M3 3v5h5" }]],
+	"refresh-cw": [["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" }], ["path", { d: "M21 3v5h-5" }], ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" }], ["path", { d: "M8 16H3v5" }]],
+	"minimize": [["path", { d: "m14 10 7-7" }], ["path", { d: "M20 10h-6V4" }], ["path", { d: "m3 21 7-7" }], ["path", { d: "M4 14h6v6" }]],
+	"folder": [["path", { d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" }]],
+	"clock": [["circle", { cx: 12, cy: 12, r: 10 }], ["path", { d: "M12 6v6l4 2" }]],
+	"alert": [["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" }], ["path", { d: "M12 9v4" }], ["path", { d: "M12 17h.01" }]],
+	"chevron-left": [["path", { d: "m15 18-6-6 6-6" }]],
+	"plus": [["path", { d: "M5 12h14" }], ["path", { d: "M12 5v14" }]],
+	"stop": [["rect", { x: 3, y: 3, width: 18, height: 18, rx: 2, fill: "currentColor", stroke: "none" }]],
+	"bot": [["path", { d: "M12 8V4H8" }], ["rect", { width: 16, height: 12, x: 4, y: 8, rx: 2 }], ["path", { d: "M2 14h2" }], ["path", { d: "M20 14h2" }], ["path", { d: "M15 13v2" }], ["path", { d: "M9 13v2" }]]
+};
+
+function Icon({ name, size = 14, className = "" }) {
+	const parts = ICON_PATHS[name] || [];
+	if (parts.length === 0) return null;
+	return h("svg", {
+		className: `dhac_icon${className ? " " + className : ""}`,
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: 2,
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true"
+	}, parts.map(([tag, attrs], i) => h(tag, { key: i, ...attrs })));
+}
+
+// HTML string variant for imperatively-built DOM (toggle button).
+function iconSvgMarkup(name, size = 15) {
+	const parts = ICON_PATHS[name] || [];
+	const inner = parts.map(([tag, attrs]) => {
+		const attrStr = Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(" ");
+		return `<${tag} ${attrStr}></${tag}>`;
+	}).join("");
+	return `<svg class="dhac_icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+}
+
+// ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
 const API_BASE = "/agent-commander/api";
@@ -62,11 +109,18 @@ function setAgents(next) {
 function getAgents() {
 	return agentSnapshot;
 }
+let subscriberCount = 0;
 function subscribeAgents(fn) {
+	subscriberCount++;
 	agentListeners.add(fn);
 	fn(agentSnapshot);
 	return () => {
 		agentListeners.delete(fn);
+		subscriberCount--;
+		if (subscriberCount === 0 && listWs !== null) {
+			try { listWs.close(); } catch {}
+			listWs = null;
+		}
 	};
 }
 /** Scope the pushed agent list to a workspace folder and reconnect the WS.
@@ -84,11 +138,17 @@ function setListCwd(cwd) {
 	}
 	connectListWs();
 }
+let connecting = false;
 function connectListWs() {
+	if (connecting) return;
 	if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) return;
+	connecting = true;
 	let ws;
 	const open = () => {
-		if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) return;
+		if (listWs !== null && (listWs.readyState === WebSocket.CONNECTING || listWs.readyState === WebSocket.OPEN)) {
+			connecting = false;
+			return;
+		}
 		const qs = listCwd !== void 0 ? `?cwd=${encodeURIComponent(listCwd)}` : "";
 		ws = new WebSocket(wsUrl(`/agent-commander/ws/list${qs}`));
 		listWs = ws;
@@ -99,6 +159,7 @@ function connectListWs() {
 		};
 		ws.onclose = () => {
 			if (listWs === ws) listWs = null;
+			connecting = false;
 			setTimeout(open, 2000);
 		};
 		ws.onerror = () => {
@@ -117,6 +178,7 @@ const STATUS_LABEL = {
 	working: "工作中",
 	idle: "空闲",
 	blocked: "受阻",
+	closing: "退出中…",
 	exited: "已退出"
 };
 
@@ -254,6 +316,28 @@ function getRolePresets() {
 		: DEFAULT_ROLE_PRESETS;
 }
 
+// ---------------------------------------------------------------------------
+// ResizeObserver throttle helper — shared by AgentTerminal & MiniTerminal.
+// Coalesces rapid resize events into at most one callback per 200ms window.
+// ---------------------------------------------------------------------------
+function makeThrottledResizeObserver(callbacks) {
+	let throttleTimer = null;
+	const observer = new ResizeObserver(() => {
+		if (throttleTimer !== null) return;
+		throttleTimer = setTimeout(() => {
+			throttleTimer = null;
+			for (const fn of callbacks) { try { fn(); } catch {} }
+		}, 200);
+	});
+	return {
+		observe(target) { observer.observe(target); },
+		disconnect() {
+			if (throttleTimer !== null) { clearTimeout(throttleTimer); throttleTimer = null; }
+			observer.disconnect();
+		}
+	};
+}
+
 function AgentTerminal({ agentId, signalRef }) {
 	const containerRef = useRef(null);
 	const wsRef = useRef(null);
@@ -363,13 +447,7 @@ function AgentTerminal({ agentId, signalRef }) {
 				ws.send(JSON.stringify({ type: "input", data }));
 			}
 		});
-		const resizeObserver = new ResizeObserver(() => {
-			try {
-				fit.fit();
-				sendResize();
-				pinToBottom();
-			} catch {}
-		});
+		const resizeObserver = makeThrottledResizeObserver([fit.fit, sendResize, pinToBottom]);
 		resizeObserver.observe(container);
 		connect();
 		return () => {
@@ -391,11 +469,15 @@ function AgentTerminal({ agentId, signalRef }) {
 			wsRef.current.send(JSON.stringify({ type: "signal", signal }));
 		}
 	}, []);
-	if (signalRef !== void 0) signalRef.current = sendSignal;
+	useEffect(() => {
+		if (signalRef !== void 0) signalRef.current = sendSignal;
+		return () => { if (signalRef !== void 0) signalRef.current = void 0; };
+	}, [signalRef, sendSignal]);
 
 	return h("div", { className: "dhac_terminalWrap" }, [
 		h("div", { className: "dhac_terminalBanner" }, [
-			h("span", null, connected ? "● 已连接" : "○ 连接中…"),
+			h("span", { className: `dhac_termDot${connected ? " dhac_termDotOn" : ""}` }),
+			h("span", null, connected ? "已连接" : "连接中…"),
 			h("span", { style: { flex: "1" } })
 		]),
 		h("div", { ref: containerRef, className: "dhac_terminal" })
@@ -444,6 +526,7 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 			onClose();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
+		} finally {
 			setBusy(false);
 		}
 	};
@@ -609,13 +692,7 @@ function MiniTerminal({ agentId }) {
 			};
 		};
 		connect();
-		const resizeObserver = new ResizeObserver(() => {
-			try {
-				fit.fit();
-				sendResize();
-				pinToBottom();
-			} catch {}
-		});
+		const resizeObserver = makeThrottledResizeObserver([fit.fit, sendResize, pinToBottom]);
 		resizeObserver.observe(container);
 		return () => {
 			closed = true;
@@ -639,7 +716,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 	if (agents.length === 0) {
 		return h("div", { className: "dhac_empty" }, [
 			h("div", null, scoped ? "本文件夹还没有智能体" : "还没有智能体"),
-			h("div", { className: "dhac_emptyHint" }, "点击右上角「＋ 新建」打开 claude / opencode / codex，或让 DeepSeek 用 agent_open 工具创建"),
+			h("div", { className: "dhac_emptyHint" }, "点击右上角「新建」打开 claude / opencode / codex，或让 DeepSeek 用 agent_open 工具创建"),
 			h("div", { className: "dhac_emptyHint" }, "智能体共享记忆：.deepseek/memory.md · task-board.md · experience.md · handoffs/")
 		]);
 	}
@@ -665,7 +742,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onRestore(agent.id);
 							}
-						}, "⏻"),
+						}, h(Icon, { name: "power", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -674,7 +751,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onForget(agent.id);
 							}
-						}, "✕")
+						}, h(Icon, { name: "x", size: 12 }))
 					])
 					: h("span", { style: { display: "contents" } }, [
 						COMPACT_SUPPORTED.has(agent.type) && h("button", {
@@ -685,7 +762,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onCompact(agent.id);
 							}
-						}, "🗜"),
+						}, h(Icon, { name: "minimize", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -694,7 +771,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onNewSession(agent.id);
 							}
-						}, "↺"),
+						}, h(Icon, { name: "rotate-ccw", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -703,14 +780,27 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 								e.stopPropagation();
 								onCloseAgent(agent.id);
 							}
-						}, "✕")
+						}, h(Icon, { name: "x", size: 12 }))
 					])
 			]),
 			agent.role !== "" && h("div", { className: "dhac_agentRole", title: agent.role }, agent.role),
+			(agent.briefing === "pending" || agent.briefing === "failed") && h("div", {
+				className: agent.briefing === "failed" ? "dhac_briefing dhac_briefingFailed" : "dhac_briefing",
+				title: "角色/技能简报会在智能体启动就绪后自动写入并回车执行"
+			}, [
+				h(Icon, { name: agent.briefing === "pending" ? "clock" : "alert", size: 11, className: "dhac_inlineIcon" }),
+				agent.briefing === "pending" ? "简报注入中（等待启动就绪后自动回车执行）…" : "简报未能确认执行，请打开终端检查"
+			]),
 			h("div", { className: "dhac_agentMeta", title: `${agent.cwd} · 会话 ${agent.sessionName ?? agent.sessionId ?? "-"}` },
 				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.restored ? " · 已恢复" : ""}`),
 			ghost
-				? h("div", { className: "dhac_cardExited" }, `未运行（恢复失败或已关闭）— ⏻ 恢复 / ✕ 删除记录`)
+				? h("div", { className: "dhac_cardExited" }, [
+					"未运行（恢复失败或已关闭）— ",
+					h(Icon, { name: "power", size: 11, className: "dhac_inlineIcon" }),
+					" 恢复 / ",
+					h(Icon, { name: "x", size: 11, className: "dhac_inlineIcon" }),
+					" 删除记录"
+				])
 				: (agent.exited
 					? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
 					: h("div", { className: "dhac_miniTermWrap" }, h(MiniTerminal, { agentId: agent.id })))
@@ -723,20 +813,26 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 	const ghost = agent.running === false;
 	return h("div", { className: "dhac_root" }, [
 		h("div", { className: "dhac_toolbar" }, [
-			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, "‹"),
+			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, h(Icon, { name: "chevron-left", size: 14 })),
 			h("span", { className: "dhac_toolbarName", title: `${agent.name} · ${agent.cwd}` }, `${agent.name} (${agent.type})`),
 			h("span", { className: "dhac_agentMeta" }, ghost ? "已保存·未运行" : (STATUS_LABEL[agent.status] ?? agent.status)),
-			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "重新启动该智能体（恢复会话）", onClick: () => onRestore(agent.id) }, "⏻"),
-			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, "✕"),
-			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, "🗜"),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, "↺"),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, "⏹"),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, "✕")
+			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "重新启动该智能体（恢复会话）", onClick: () => onRestore(agent.id) }, h(Icon, { name: "power", size: 13 })),
+			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 })),
+			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, h(Icon, { name: "minimize", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "rotate-ccw", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, h(Icon, { name: "stop", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 }))
 		]),
 		ghost
 			? h("div", { className: "dhac_terminalDead" }, [
 				h("div", null, "该智能体记录保存在本工作区的 .deepseek/agents.json 中，但进程未运行（恢复失败或已关闭）。"),
-				h("div", { className: "dhac_terminalDeadHint" }, "点「⏻ 恢复」重新启动；点「✕」删除该记录。")
+				h("div", { className: "dhac_terminalDeadHint" }, [
+					"点「",
+					h(Icon, { name: "power", size: 11, className: "dhac_inlineIcon" }),
+					" 恢复」重新启动；点「",
+					h(Icon, { name: "x", size: 11, className: "dhac_inlineIcon" }),
+					"」删除该记录。"
+				])
 			])
 			: (agent.exited
 				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
@@ -917,11 +1013,17 @@ function RadarPanel(props) {
 		h("div", { className: "dhac_header" }, [
 			h("span", { className: "dhac_headerTitle" }, "智能体雷达"),
 			h("span", { className: "dhac_count" }, String(merged.length)),
-			h("button", { type: "button", className: "dhac_iconButton", title: "重新检测本文件夹的智能体列表", onClick: () => reDetect(workspaceCwd), disabled: scanning }, scanning ? "…" : "↻"),
-			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, "＋ 新建")
+			h("button", { type: "button", className: "dhac_iconButton", title: "重新检测本文件夹的智能体列表", onClick: () => reDetect(workspaceCwd), disabled: scanning },
+				h(Icon, { name: "refresh-cw", size: 13, className: scanning ? "dhac_spin" : "" })),
+			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, [
+				h(Icon, { name: "plus", size: 13 }),
+				h("span", null, "新建")
+			])
 		]),
-		h("div", { className: "dhac_workspace", title: workspaceCwd ?? "未绑定工作区（显示全部智能体）" },
-			`📁 ${workspaceLabel}${scanning ? " · 检测中…" : ""}`),
+		h("div", { className: "dhac_workspace", title: workspaceCwd ?? "未绑定工作区（显示全部智能体）" }, [
+			h(Icon, { name: "folder", size: 12, className: "dhac_inlineIcon" }),
+			h("span", null, `${workspaceLabel}${scanning ? " · 检测中…" : ""}`)
+		]),
 		h("div", { className: "dhac_toasts" },
 			toasts.map((t) =>
 				h("div", { key: t.id, className: `dhac_toast dhac_toast_${t.kind}` }, t.text))),
@@ -1082,7 +1184,7 @@ function apply(ctx) {
 			btn.title = "智能体雷达（点击弹出/收起侧边栏）";
 			const icon = document.createElement("span");
 			icon.className = "dhac_toggleIcon";
-			icon.textContent = "🤖";
+			icon.innerHTML = iconSvgMarkup("bot", 15);
 			const label = document.createElement("span");
 			label.className = "dhac_toggleLabel";
 			label.textContent = "雷达";
