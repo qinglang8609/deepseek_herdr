@@ -47,7 +47,22 @@
 
 ## 安装
 
-### 标准安装（推荐，`dsh plugin add` + tarball）
+### GitHub 安装（推荐，`dsh plugin add github:...`）
+
+仓库根已带 `package.json` 包装（name=dsh-agent-commander），可直接从 GitHub 安装：
+
+```bash
+# 安装最新 main 分支
+dsh plugin add github:qinglang8609/deepseek_herdr
+
+# 或锁定到发布 tag
+dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.1
+```
+
+> 首次安装若提示 node-pty 构建脚本被忽略（`ERR_PNPM_IGNORED_BUILDS`），在 profile 目录
+> 执行 `pnpm approve-builds` 放行 node-pty 即可。
+
+### tarball 安装（`dsh plugin add` + tarball）
 
 本插件是符合官方标准的**组合包（bundle）**：`package.json` 声明 `dsh.bundle.patch`
 （`cordis.patch.yml`），用官方流程装进 profile（见
@@ -56,7 +71,7 @@
 ```bash
 # 从本仓库目录：先打发布 tarball（已附在仓库 plugin/ 下），再标准安装：
 cd plugin && pnpm pack
-dsh plugin --profile web add ./dsh-agent-commander-0.2.0.tgz
+dsh plugin --profile web add ./dsh-agent-commander-0.2.1.tgz
 ```
 
 > **为什么用 tarball 而不是 `dsh plugin add ./plugin`？** 目录安装会被 pnpm 按
