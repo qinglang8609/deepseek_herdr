@@ -1,0 +1,59 @@
+{
+  "name": "dsh-agent-commander",
+  "version": "0.2.1",
+  "description": "DSH web plugin: multi-agent commander. Open Claude / opencode / codex agents with role & skill definitions, watch every agent's live terminal in a right-side radar panel, and let DeepSeek dispatch tasks through agent_* tools. Shared memory: 记忆库.md / 任务看板.md / 交接区 in the project directory.",
+  "type": "module",
+  "main": "plugin/lib/index.js",
+  "types": "plugin/lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./plugin/lib/types/index.d.ts",
+      "default": "./plugin/lib/index.js"
+    },
+    "./client": {
+      "types": "./plugin/lib/types/client/index.d.ts",
+      "default": "./plugin/lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "plugin/lib",
+    "plugin/skill",
+    "plugin/cordis.patch.yml",
+    "plugin/README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "bundle",
+    "multi-agent",
+    "agent-commander",
+    "claude",
+    "opencode",
+    "codex",
+    "terminal"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./plugin/cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ],
+      "platform": "web"
+    }
+  }
+}
