@@ -80,6 +80,48 @@ const BODY_LIMIT = 1 << 20; // 1 MiB request body cap
 const WS_INPUT_LIMIT = 64 << 10; // 64 KiB per terminal input frame
 const ALLOWED_SIGNALS = ["SIGINT", "SIGTSTP", "SIGTERM"];
 const AGENT_TYPES = ["claude", "opencode", "codex", "codebuddy", "pi", "qwen"];
+// ---------------------------------------------------------------------------
+// Startup / exit monitor — a per-agent lifecycle watcher.
+//
+// On spawn it watches the live transcript until the CLI has FORMALLY entered
+// its UI: it auto-answers boot prompts along the way (claude's folder-trust
+// menu "1. Yes, I trust this folder / Enter to confirm", generic y/n
+// confirmations), then injects the role/skill briefing and SUBMITS it with
+// Enter (回车执行), keeps auto-answering prompts until the first task finishes,
+// and only then exits the monitor. A fixed delay is unreliable: opencode boots
+// with a continuously animating spinner for many seconds and swallows any text
+// written mid-boot, and an Enter that lands during a TUI redraw leaves the
+// prompt text sitting unexecuted on the input line.
+//
+// On close the monitor flips to "exit" phase and the handle stays visible as
+// 退出中 until the PTY process has fully exited.
+// ---------------------------------------------------------------------------
+const MONITOR_POLL_MS = 400;
+const MONITOR_BOOT_GRACE = 1200;    // min ms after spawn before readiness counts
+const MONITOR_QUIET_MS = 900;       // ms of output silence = "settled at the prompt"
+const MONITOR_CAP_MS = 25000;       // boot+inject must happen within this
+const MONITOR_OPENCODE_CAP_MS = 120000; // opencode boots slow (MCP/plugin loading): backstop only
+const MONITOR_OPENCODE_VERIFY_MS = 20000; // cadence for db-verifying opencode briefing delivery
+const MONITOR_OPENCODE_MAX_INJECTS = 5;   // re-inject attempts while its TUI is still booting
+const MONITOR_ENTER_DELAY = 350;    // ms between writing text and pressing Enter
+const MONITOR_ENTER_RETRY_MS = 1500; // re-press Enter if no reaction by then
+const MONITOR_MAX_ENTERS = 3;
+const MONITOR_TASK_QUIET_MS = 8000; // output quiet this long after activity = first task done
+const MONITOR_TOTAL_CAP_MS = 300000; // 5 min: total monitor lifetime (long first task)
+const MONITOR_ANSWER_REPEAT_MS = 20000; // same question signature re-answered after this
+// Status sweep: periodically re-evaluate "working" agents that stopped producing
+// output. opencode's idle TUI has no Claude-specific markers, so deriveStatus()
+// alone cannot detect its idle state — the sweep catches quiet agents instead.
+const STATUS_IDLE_AFTER_MS = 25000;   // ms of silence before a "working" agent is re-checked
+const STATUS_ACTIVE_RE = /[⠀-⣿]|Thinking|Forming|Brewing|Wrangling|Boogie|working on|Reading |esc to interrupt/i;
+// Prompts to auto-answer. `enter` confirms with Enter only (menus whose default
+// is the safe choice, e.g. claude's folder trust); `y` answers y + Enter.
+// Matched against the whitespace-stripped transcript tail.
+const MONITOR_QUESTION_PATTERNS = [
+	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck|Doyoutrustthefilesinthisfolder/, enter: true },
+	{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, y: true },
+	{ re: /PressEnterto|Entertoselect|Selectanoption/, enter: true }
+];
 /**
 * Graceful-exit command per engine (research: claude/codebuddy/qwen use /exit;
 * pi supports /exit and /quit; codex exits on `exit`; opencode has NO text exit —
@@ -506,7 +548,7 @@ const MEMORY_USAGE_DOC = `# 记忆层操作手册 (SQLite)
 \`\`\`sql
 CREATE TABLE memory (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  namespace TEXT NOT NULL DEFAULT 'experience',  -- facts | decisions | experience | pitfalls | patterns
+  namespace TEXT NOT NULL DEFAULT 'general',    -- facts | decisions | experience | pitfalls | patterns
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   tags TEXT DEFAULT '',                          -- comma-separated
@@ -768,6 +810,7 @@ var AgentRegistry = class {
 		this.agents = new Map();
 		this.listeners = new Set();
 		this.statusTimer = null;
+		this.statusSweepTimer = setInterval(() => this.statusSweep(), 5000);
 		// True while restoreState/scanCwd are re-spawning saved agents: persist()
 		// must NOT delete the agents.json of a root it hasn't finished restoring
 		// yet (the file is the only record of those agents).
@@ -785,6 +828,25 @@ var AgentRegistry = class {
 			this.notify();
 		}, 1500);
 	}
+	/**
+	 * Periodic sweep: re-evaluate agents stuck at "working" that have not
+	 * produced output for STATUS_IDLE_AFTER_MS. The Braille spinner and
+	 * thinking-verb check (STATUS_ACTIVE_RE) covers opencode, claude, and
+	 * future engines — if the last 4000 bytes of transcript contain no active
+	 * indicator and enough time has passed, the agent is demoted to "idle".
+	 */
+	statusSweep() {
+		const now = Date.now();
+		for (const handle of this.agents.values()) {
+			if (handle.status !== "working" || handle.exited) continue;
+			const lastAt = handle.lastOutputAt ?? handle.updatedAt ?? 0;
+			if (now - lastAt < STATUS_IDLE_AFTER_MS) continue;
+			const tail = stripAnsi(handle.transcript.slice(-4000));
+			if (STATUS_ACTIVE_RE.test(tail)) continue;
+			handle.status = "idle";
+			this.scheduleStatusNotify();
+		}
+	}
 	create({ type, name, role, skills, cwd, cols, rows, id, sessionId, sessionName, workspaceId, restored }) {
 		if (this.agents.size >= this.maxAgents) throw new Error(`agent limit reached (${this.maxAgents})`);
 		if (!AGENT_TYPES.includes(type)) throw new Error(`unknown agent type "${type}" — allowed: ${AGENT_TYPES.join(", ")}`);
@@ -798,12 +860,14 @@ var AgentRegistry = class {
 			} catch {}
 		}
 		const agentId = typeof id === "string" && id !== "" ? id : randomUUID().slice(0, 8);
+		const trimmedRole = (role ?? "").trim();
+		const skillList = Array.isArray(skills) ? skills.filter((s) => typeof s === "string") : [];
 		const handle = {
 			id: agentId,
 			type,
 			name: (name ?? type).trim() || type,
-			role: (role ?? "").trim(),
-			skills: Array.isArray(skills) ? skills.filter((s) => typeof s === "string") : [],
+			role: trimmedRole,
+			skills: skillList,
 			cwd: targetCwd,
 			sessionId: typeof sessionId === "string" ? sessionId : "",
 			sessionName: typeof sessionName === "string" ? sessionName : "",
@@ -812,6 +876,8 @@ var AgentRegistry = class {
 			pid: 0,
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
+			lastOutputAt: Date.now(),
+			briefing: trimmedRole !== "" || skillList.length > 0 ? "pending" : "none",
 			exited: false,
 			exitCode: null,
 			status: "idle",
@@ -829,6 +895,7 @@ var AgentRegistry = class {
 			handle.transcript += data;
 			if (handle.transcript.length > this.transcriptLimit) handle.transcript = handle.transcript.slice(handle.transcript.length - this.transcriptLimit);
 			handle.updatedAt = Date.now();
+			handle.lastOutputAt = Date.now();
 			const next = deriveStatus(handle.transcript, handle.status);
 			if (next !== handle.status) {
 				handle.status = next;
@@ -836,6 +903,7 @@ var AgentRegistry = class {
 			}
 		});
 		handle.pty.onExit(({ exitCode }) => {
+			clearTimeout(handle._monitorTimer);
 			handle.exited = true;
 			handle.exitCode = exitCode;
 			handle.status = "exited";
@@ -844,10 +912,10 @@ var AgentRegistry = class {
 			this.persist();
 		});
 		this.agents.set(agentId, handle);
-		// Role/skill briefing lands after the CLI has drawn its first screen.
-		if (handle.role !== "" || handle.skills.length > 0) {
-			setTimeout(() => this.injectBriefing(handle), 1500);
-		}
+		// Startup monitor: watch boot, auto-answer prompts (folder trust, y/n),
+		// inject the briefing and submit it with Enter once the CLI has formally
+		// entered its UI, and keep answering until the first task completes.
+		this.startMonitor(handle, handle.briefing === "pending");
 		this.notify();
 		this.persist();
 		return handle;
@@ -861,8 +929,173 @@ var AgentRegistry = class {
 		}
 		return env;
 	}
-	injectBriefing(handle) {
-		if (handle.exited) return;
+	/**
+	 * Start the lifecycle monitor for a freshly spawned agent. `inject` is true
+	 * when a role/skill briefing must be delivered as the agent's first task
+	 * (false for restored agents — their saved conversation already contains it,
+	 * but the monitor still auto-answers any boot prompts such as login).
+	 */
+	startMonitor(handle, inject) {
+		const m = handle._monitor = {
+			phase: "boot",          // boot → inject → verify → done; "exit" on close
+			startedAt: Date.now(),
+			inject: inject === true,
+			injected: false,
+			injectAt: 0,
+			enterDue: 0,
+			enters: 0,
+			baseline: 0,            // transcript length at the last Enter press
+			reacted: false,         // saw the agent actually react to the briefing
+			answered: []            // [{ sig, at }] — prompts already answered
+		};
+		if (inject) handle.briefing = "pending";
+		handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
+	}
+	/**
+	 * One monitor tick: auto-answer prompts, inject + submit the briefing once
+	 * the CLI has formally entered its UI, retry Enter until the agent reacts,
+	 * and finish after the first task completes (activity, then output quiet).
+	 */
+	monitorTick(handle) {
+		const m = handle._monitor;
+		if (handle.exited || m === void 0 || m.phase === "done" || m.phase === "exit") return;
+		const now = Date.now();
+		const elapsed = now - m.startedAt;
+		const clean = stripAnsi(handle.transcript.slice(-4000));
+		const norm = clean.replace(/\s+/g, "");
+
+		// 1) Auto-answer interactive prompts (boot questions + first-task prompts).
+		this.answerPrompts(handle, clean, norm, now);
+
+		// 2) Inject the briefing once the CLI is ready (or at the boot cap).
+		if (!m.injected && m.inject && m.phase === "boot") {
+			// opencode boots slowly (spawning MCP servers, loading plugins) and
+			// swallows input written before it settles — so its cap is much
+			// longer and only a backstop; delivery is verified below.
+			const cap = handle.type === "opencode" ? MONITOR_OPENCODE_CAP_MS : MONITOR_CAP_MS;
+			if (this.cliReady(handle, clean, norm, elapsed) || elapsed >= cap) {
+				this.injectBriefing(handle, m);
+			}
+		}
+
+		// 3) Delivery + verification loop.
+		if (m.injected && !m.reacted) {
+			if (handle.type === "opencode") {
+				// opencode's TUI does NOT echo accepted input to the PTY output
+				// stream, so transcript growth can't prove delivery — and it
+				// swallows text written mid-boot (MCP/plugin loading). Verify
+				// against opencode's OWN session db that the briefing landed as
+				// a user message; if not, re-write the full text + Enter (a bare
+				// Enter would submit an empty line) and keep polling until
+				// confirmed, attempts exhausted, or the total cap.
+				if (now >= m.ocVerifyAt) {
+					if (this.opencodeBriefingLanded(handle, m.injectAt - 5000)) {
+						m.reacted = true;
+					} else if (m.ocAttempts < MONITOR_OPENCODE_MAX_INJECTS && elapsed < MONITOR_TOTAL_CAP_MS) {
+						m.ocAttempts += 1;
+						m.ocVerifyAt = now + MONITOR_OPENCODE_VERIFY_MS;
+						this.writeBriefing(handle, m);
+					} else {
+						// keep verifying (a late landing still counts) — no more writes
+						m.ocVerifyAt = now + MONITOR_OPENCODE_VERIFY_MS;
+					}
+				}
+			} else if (m.enters > 0 && handle.transcript.length > m.baseline + 512) {
+				// Reacted = the CLI produced new output after Enter (an accepted
+				// submit redraws/clears the input line and starts the task; a
+				// swallowed Enter leaves the transcript untouched). No best-effort
+				// fallback: if the text never landed we finish "failed" so the
+				// panel says 简报未能确认执行 instead of a false "sent".
+				m.reacted = true;
+			}
+		}
+		// Enter retry for engines whose text is already sitting on the input line.
+		if (handle.type !== "opencode" && m.injected && !m.reacted && m.enters < MONITOR_MAX_ENTERS && now >= m.enterDue) {
+			this.pressEnter(handle, m);
+		}
+
+		// 4) First task done = reaction seen, then output quiet for a while.
+		if (m.injected && m.reacted && m.phase === "boot") {
+			const quietMs = Date.now() - (handle.lastOutputAt ?? now);
+			if (quietMs >= MONITOR_TASK_QUIET_MS || elapsed >= MONITOR_TOTAL_CAP_MS) {
+				this.finishMonitor(handle, m, m.reacted ? "sent" : "failed");
+				return;
+			}
+		}
+
+		// 5) Hard caps: restored / no-briefing agents only need the boot window.
+		const cap = m.inject ? MONITOR_TOTAL_CAP_MS : MONITOR_CAP_MS;
+		if (elapsed >= cap) {
+			const state = m.inject ? (m.injected ? (m.reacted ? "sent" : "failed") : "failed") : "none";
+			this.finishMonitor(handle, m, state);
+			return;
+		}
+
+		handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
+	}
+	/**
+	 * Auto-answer one interactive prompt per tick. Signatures prevent answering
+	 * the same persistent on-screen question twice within MONITOR_ANSWER_REPEAT_MS.
+	 */
+	answerPrompts(handle, clean, norm, now) {
+		// Only auto-answer during the boot phase to limit prompt injection surface.
+		// Once the monitor transitions to task phase, the agent handles its own prompts.
+		const m = handle._monitor;
+		if (m.phase !== "boot") return;
+		for (const pattern of MONITOR_QUESTION_PATTERNS) {
+			const match = pattern.re.exec(norm);
+			if (match === null) continue;
+			const sig = `${pattern.re.source}:${String(match[0] ?? "").slice(0, 40)}`;
+			// Menus (Enter-confirm) are one-shot — the prompt text stays in the
+			// accumulated transcript, so only skip re-answering y/n prompts
+			// within the repeat window; a NEW y/n prompt of the same kind (e.g.
+			// several "Do you want to proceed?" permission gates) is re-answered.
+			const last = m.answered.find((a) => a.sig === sig);
+			if (last !== void 0 && (pattern.enter === true || now - last.at < MONITOR_ANSWER_REPEAT_MS)) continue;
+			m.answered.push({ sig, at: pattern.enter === true ? Infinity : now });
+			if (m.answered.length > 40) m.answered.shift();
+			try {
+				if (pattern.enter === true) {
+					handle.pty.write("\r");
+				} else {
+					// y + Enter (two-phase, same discipline as send/submit).
+					handle.pty.write("y");
+					setTimeout(() => {
+						try {
+							handle.pty.write("\r");
+						} catch {}
+					}, 200);
+				}
+			} catch {}
+			// The answer will produce output; never inject right on top of it.
+			handle.lastOutputAt = Date.now();
+			return; // one answer per tick — re-evaluate next poll
+		}
+	}
+	/**
+	 * Is the CLI formally ready to accept the briefing? Quiet after a boot grace
+	 * is the generic signal (TUIs only go quiet once they settle at the prompt);
+	 * per-engine markers catch CLIs whose footer keeps animating.
+	 */
+	cliReady(handle, clean, norm, elapsed) {
+		if (elapsed < MONITOR_BOOT_GRACE) return false;
+		// opencode: require its prompt marker. The TUI repaints continuously
+		// while restoring a session, so "quiet" alone is NOT a readiness signal —
+		// injecting during that window gets swallowed and the briefing is lost.
+		if (handle.type === "opencode") return /Askanything|escinterrupt|tabagents|ctrl\+p/.test(norm);
+		const quiet = Date.now() - (handle.lastOutputAt ?? Date.now()) >= MONITOR_QUIET_MS;
+		if (quiet) return true;
+		// Note: `norm` has all whitespace stripped, so markers must be too.
+		if (handle.type === "claude" && /\?forshortcuts|←foragents|❯Try|Welcomeback/.test(norm)) return true;
+		return false;
+	}
+	/**
+	 * Write the role/skill briefing as the agent's first task. opencode's input
+	 * box is single-line — the TUI drops embedded newlines, so join with spaces
+	 * there; other engines accept multi-line input. The Enter submit happens in
+	 * monitorTick (two-phase: text now, Enter at MONITOR_ENTER_DELAY).
+	 */
+	briefingText(handle) {
 		const lines = [
 			`[dsh-agent-commander] 你已被总指挥以「${handle.name}」的身份启动（引擎：${handle.type}）。`,
 			`职责定义：${handle.role}`,
@@ -874,18 +1107,107 @@ var AgentRegistry = class {
 			"5. 向总指挥（DeepSeek）汇报：做了什么、结果如何、下一步建议。"
 		];
 		for (const skill of handle.skills) lines.push(`请先阅读并遵循技能文件：${skill}`);
+		return handle.type === "opencode" ? lines.join(" ") : lines.join("\n");
+	}
+	injectBriefing(handle, m) {
+		if (handle.exited) return;
+		m.injected = true;
+		m.injectAt = Date.now();
+		m.enters = 0;
+		m.reacted = false;
+		m.enterDue = m.injectAt + MONITOR_ENTER_DELAY;
+		if (handle.type === "opencode") {
+			m.ocAttempts = 0;
+			m.ocVerifyAt = m.injectAt + MONITOR_OPENCODE_VERIFY_MS;
+			this.writeBriefing(handle, m);
+		} else {
+			try {
+				handle.pty.write(this.briefingText(handle));
+			} catch {}
+		}
+	}
+	/**
+	 * opencode: write the briefing text and submit it with Enter after the
+	 * usual delay. Used for both the initial inject and every verification
+	 * retry — opencode swallows text written mid-boot, so retrying the full
+	 * text (not just Enter) is what eventually lands it.
+	 */
+	writeBriefing(handle, m) {
 		try {
-			// Two-phase submit: text first, Enter a moment later — a single big
-			// write with a trailing newline can land in multi-line input and
-			// never execute, which is why the briefing must be SUBMITTED to take
-			// effect as the agent's first task.
-			handle.pty.write(lines.join("\n"));
-			setTimeout(() => {
-				try {
-					handle.pty.write("\r");
-				} catch {}
-			}, 250);
+			handle.pty.write(this.briefingText(handle));
 		} catch {}
+		m.baseline = handle.transcript.length;
+		setTimeout(() => {
+			try {
+				handle.pty.write("\r");
+			} catch {}
+		}, MONITOR_ENTER_DELAY);
+	}
+	/** Path to opencode's global session db (null when opencode hasn't run yet). */
+	opencodeDbPath() {
+		try {
+			const p = join(homedir(), ".local", "share", "opencode", "opencode.db");
+			return existsSync(p) ? p : null;
+		} catch {
+			return null;
+		}
+	}
+	/**
+	 * Did the briefing text land as a user message in opencode's session db?
+	 * Looks for a part containing the briefing marker in any session rooted at
+	 * the agent's cwd, created after the injection moment. Read-only; the
+	 * caller throttles calls to this (once per MONITOR_OPENCODE_VERIFY_MS).
+	 */
+	opencodeBriefingLanded(handle, sinceMs) {
+		try {
+			const dbPath = this.opencodeDbPath();
+			if (dbPath === null) return false;
+			const sqlite = loadSqlite();
+			if (sqlite === null) return false;
+			// Plain open (SELECTs only): avoids `readOnly` which older Node's
+			// node:sqlite doesn't support, and a shared read connection is safe
+			// against opencode's own WAL connection.
+			const db = new sqlite.DatabaseSync(dbPath);
+			try {
+				const row = db.prepare(
+					`SELECT 1 AS hit FROM session s
+					 WHERE s.directory = ?
+					   AND EXISTS (
+					     SELECT 1 FROM part p
+					     WHERE p.session_id = s.id
+					       AND p.time_created >= ?
+					       AND p.data LIKE '%你已被总指挥以「%'
+					   )
+					 LIMIT 1`
+				).get(resolve(handle.cwd), sinceMs);
+				return row !== undefined;
+			} finally {
+				db.close();
+			}
+		} catch {
+			return false;
+		}
+	}
+	/** Press Enter on the agent's terminal (submits whatever is on the input line). */
+	pressEnter(handle, m) {
+		if (handle.exited) return;
+		m.enters += 1;
+		m.baseline = handle.transcript.length;
+		m.enterDue = Date.now() + MONITOR_ENTER_RETRY_MS;
+		try {
+			handle.pty.write("\r");
+		} catch {}
+	}
+	/** End the monitor; `briefing` state is reported to the radar panel. */
+	finishMonitor(handle, m, state) {
+		m.phase = "done";
+		handle.briefing = state;
+		handle.updatedAt = Date.now();
+		this.notify();
+		// Keep .deepseek/agents.json in sync: without this it stays at the
+		// creation-time "pending" snapshot forever even after the briefing was
+		// delivered ("sent") or failed.
+		this.persist();
 	}
 	meta(handle) {
 		return {
@@ -903,6 +1225,7 @@ var AgentRegistry = class {
 			sessionName: handle.sessionName,
 			workspaceId: handle.workspaceId,
 			restored: handle.restored === true,
+			briefing: handle.briefing ?? "none",
 			createdAt: handle.createdAt,
 			updatedAt: handle.updatedAt
 		};
@@ -1039,7 +1362,9 @@ var AgentRegistry = class {
 					const after = statSize(dbPath);
 					freed += Math.max(0, before - after);
 					compressed.push({ path: dbPath, before, after });
-				} catch {}
+				} catch (err) {
+					console.warn("[dsh-agent-commander] VACUUM failed for", dbPath, err?.message ?? err);
+				}
 			}
 			// 2) gzip session logs (jsonl/json) older than 1 day
 			const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
@@ -1080,6 +1405,14 @@ var AgentRegistry = class {
 	close(id, graceful = false) {
 		const handle = this.agents.get(id);
 		if (handle === void 0) throw new Error(`agent "${id}" not found`);
+		// Exit monitor: stop auto-answering, mark the agent 退出中 and keep the
+		// handle until the PTY process has FULLY exited (cleanup below runs on
+		// the real onExit, or after the kill escalation for stuck processes).
+		if (handle._monitor !== void 0) handle._monitor.phase = "exit";
+		if (!handle.exited) {
+			handle.status = "closing";
+			this.notify();
+		}
 		let cleaned = false;
 		const cleanup = () => {
 			if (cleaned) return;
@@ -1132,6 +1465,8 @@ var AgentRegistry = class {
 		return handle;
 	}
 	disposeAll() {
+		if (this.statusSweepTimer !== null) { clearInterval(this.statusSweepTimer); this.statusSweepTimer = null; }
+		if (this.statusTimer !== null) { clearTimeout(this.statusTimer); this.statusTimer = null; }
 		for (const id of [...this.agents.keys()]) this.close(id);
 	}
 	/**
@@ -1393,6 +1728,8 @@ var AgentRegistry = class {
 	}
 	/** App shutdown: save live state for the next boot, then kill every PTY. */
 	shutdown() {
+		if (this.statusSweepTimer !== null) { clearInterval(this.statusSweepTimer); this.statusSweepTimer = null; }
+		if (this.statusTimer !== null) { clearTimeout(this.statusTimer); this.statusTimer = null; }
 		// shuttingDown guards persist() against the exit events that killing
 		// the PTYs triggers: the first persist below already captured the live
 		// config, and the post-kill onExit persists must not delete it.
@@ -1490,7 +1827,7 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 	};
 	register(defineTool({
 		name: "agent_open",
-		description: "Open a new team agent in the Agent Radar (right panel). Spawns a real interactive CLI process (claude / opencode / codex) in the session working directory and returns an id handle. Pass `role` to define the agent's specialty (e.g. 数据库专家, 设计专家, 代码审查专家) and `skills` to attach skill files (paths under ~/.agents/skills) the agent must read — both are injected into the agent's terminal as its opening briefing. The agent keeps running across turns; read output with agent_read, dispatch tasks with agent_send (submit=true to press Enter), interrupt with agent_signal (SIGINT), and close it with agent_close when done. Team protocol: every agent must read .deepseek/memory.md / .deepseek/task-board.md in the working directory, update the task board on completion, and write deliverables to .deepseek/handoffs/.",
+		description: "Open a new team agent in the Agent Radar (right panel). Spawns a real interactive CLI process (claude / opencode / codex) in the session working directory and returns an id handle. Pass `role` to define the agent's specialty (e.g. 数据库专家, 设计专家, 代码审查专家) and `skills` to attach skill files (paths under ~/.agents/skills) the agent must read — both are injected into the agent's terminal as its opening briefing, delivered automatically once the CLI finishes booting (slow starters like opencode are waited for) and submitted with Enter so it executes as the agent's first task. The agent keeps running across turns; read output with agent_read, dispatch tasks with agent_send (submit=true to press Enter), interrupt with agent_signal (SIGINT), and close it with agent_close when done. Team protocol: every agent must read .deepseek/memory.md / .deepseek/task-board.md in the working directory, update the task board on completion, and write deliverables to .deepseek/handoffs/.",
 		parameters: {
 			type: {
 				type: "string",
@@ -1549,8 +1886,13 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 	}));
 	register(defineTool({
 		name: "agent_list",
-		description: "List the team agents currently open in the Agent Radar. Scoped to the CURRENT workspace (the session's working directory): only agents whose working directory is this folder or under it are returned. Returns each agent's id, engine, name, role, status (working/idle/blocked/exited) and working directory. Use this to discover agents, check who is available to take a task, and recover handles after long sequences.",
-		parameters: {},
+		description: "List the team agents currently open in the Agent Radar. Default scope = the CURRENT session's working directory, but if that folder has no open agents it automatically falls back to ALL open agents across every workspace — so agents created in other windows/sessions are still discoverable and operable. Each entry includes id, engine, name, role, status and working directory. Pass scope='all' to always list every open agent regardless of folder. Use this to discover agents, check who is available to take a task, and recover handles after long sequences.",
+		parameters: {
+			scope: {
+				type: "string",
+				description: "\"session\" (default) lists agents in the current session's working directory, falling back to all open agents when that folder has none; \"all\" always lists every open agent across all workspaces."
+			}
+		},
 		output: {
 			schema: {
 				type: "array",
@@ -1570,21 +1912,26 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => {
 				const list = value;
-				if (list.length === 0) return [{ type: "text", text: "当前工作区没有已打开的智能体。用 agent_open 打开（claude / opencode / codex）。" }];
+				if (list.length === 0) return [{ type: "text", text: "当前没有已打开的智能体。用 agent_open 新建（claude / opencode / codex）。" }];
 				return [{
 					type: "text",
-					text: `当前工作区团队智能体（${list.length}）：\n${list.map((a) => `  ${a.id}  ${a.name} (${a.type})  [${a.status}]${a.role ? ` — ${a.role}` : ""}`).join("\n")}`
+					text: `团队智能体（${list.length}）：\n${list.map((a) => `  ${a.id}  ${a.name} (${a.type})  [${a.status}]  ${a.cwd}${a.role ? ` — ${a.role}` : ""}`).join("\n")}`
 				}];
 			}
 		},
-		execute: (_args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
-			// Workspace-scoped: only the session's own folder (and subfolders).
+			// Default: session folder scope, falling back to ALL workspaces so
+			// agents opened from another window/session are still reachable.
 			const sessionId = exec.agent?.session?.id;
 			const headerCwd = sessionId === void 0 ? void 0 : ctx.sessions.get(sessionId)?.header?.cwd;
-			const list = (typeof headerCwd === "string" && headerCwd !== "")
-				? registry.listByCwd(headerCwd)
-				: registry.list();
+			let list;
+			if (args.scope === "all" || typeof headerCwd !== "string" || headerCwd === "") {
+				list = registry.list();
+			} else {
+				list = registry.listByCwd(headerCwd);
+				if (list.length === 0) list = registry.list();
+			}
 			return Promise.resolve(list.map((a) => ({
 				id: a.id,
 				type: a.type,
@@ -1666,6 +2013,65 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			exec.signal.throwIfAborted();
 			registry.send(args.id, args.text, args.submit === true);
 			return Promise.resolve({ id: args.id, submitted: args.submit === true });
+		}
+	}));
+	register(defineTool({
+		name: "agent_broadcast",
+		description: "Dispatch the SAME task to MULTIPLE team agents in parallel — the coordination primitive for running one mission across several agents (e.g. 让 claude code 和 opencode 各自用可用工具/MCP 分析同一项目). Every listed agent receives the text on its terminal and it is submitted with Enter (回车执行). Returns per-agent delivery status; poll each agent's result with agent_read. Agents keep working independently afterwards.",
+		parameters: {
+			ids: {
+				type: "array",
+				items: { type: "string" },
+				required: true,
+				description: "Agent ids to receive the task (from agent_list)."
+			},
+			text: {
+				type: "string",
+				required: true,
+				description: "Task text sent to every listed agent (no newlines; submit presses Enter)."
+			},
+			submit: {
+				type: "boolean",
+				description: "Press Enter after writing the text (default true)."
+			}
+		},
+		output: {
+			schema: {
+				type: "array",
+				items: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						id: { type: "string", required: true },
+						name: { type: "string", required: true },
+						sent: { type: "boolean", required: true },
+						error: { oneOf: [{ type: "string" }, { type: "null" }] }
+					}
+				}
+			},
+			render: (_args, value) => {
+				if (value.length === 0) return [{ type: "text", text: "没有可派发的智能体（ids 为空）。" }];
+				return [{
+					type: "text",
+					text: `已向 ${value.length} 个智能体并行派发任务：\n${value.map((r) => `  ${r.id}  ${r.name}  ${r.sent ? "✓ 已发送并回车执行" : `✗ ${r.error ?? "发送失败"}`}`).join("\n")}\n用 agent_read 逐个收集结果。`
+				}];
+			}
+		},
+		execute: (args, exec) => {
+			exec.signal.throwIfAborted();
+			const ids = Array.isArray(args.ids) ? args.ids.filter((s) => typeof s === "string" && s !== "") : [];
+			const submit = args.submit !== false;
+			const results = [];
+			for (const id of ids) {
+				try {
+					registry.send(id, String(args.text ?? ""), submit);
+					const handle = registry.get(id);
+					results.push({ id, name: handle?.name ?? id, sent: true, error: null });
+				} catch (error) {
+					results.push({ id, name: id, sent: false, error: error instanceof Error ? error.message : String(error) });
+				}
+			}
+			return Promise.resolve(results);
 		}
 	}));
 	register(defineTool({
@@ -2221,6 +2627,30 @@ export class AgentCommanderService extends Service {
 		if (this.nodePty === null) {
 			ctx.logger?.warn?.("[dsh-agent-commander] node-pty unavailable — agent spawn disabled");
 		}
+		// Mount into the framework (official plugin mechanism): contribute a
+		// global system-prompt section so EVERY conversation — new windows and
+		// fresh sessions included — knows the team-agent capability exists and
+		// how to discover/operate the agents. Without this the model only sees
+		// bare tool schemas and never learns the workflow (reported: 新对话里
+		// 不知道怎么找到智能体、怎么操作智能体). The registration is auto-disposed
+		// when the plugin unloads, per the Cordis lifecycle.
+		if (this.nodePty !== null) {
+			try {
+				ctx.systemPrompt.section({
+					name: "dsh-agent-commander:team",
+					order: 150,
+					text: [
+						"团队智能体（Agent Radar）：",
+						"右侧「智能体雷达」面板管理真实终端智能体（claude / opencode / codex 等），你可以直接指挥它们：",
+						"1. 先用 agent_list 查看已打开的智能体（含 id、引擎、状态、工作目录）；当前工作区没有时会自动列出其他工作区的智能体，跨窗口/跨会话同样可见可操作。",
+						"2. agent_open 新建（type/name/role/skills/cwd）；角色与技能会作为开场简报在启动完成后自动注入并回车执行。",
+						"3. agent_send 派发任务（submit=true 会按回车执行）；agent_broadcast 把同一任务并行派给多个智能体做协同；agent_read 轮询输出直到完成。",
+						"4. agent_approve 确认权限提问；agent_signal 发中断；agent_close 关闭（先优雅 /exit，再升级 SIGINT/SIGKILL）。",
+						"5. 团队共享记忆：项目 .deepseek/ 下 memory.md、task-board.md、experience.md、handoffs/ 与 SQLite 记忆库 memory.db；智能体开工先读、完成后回写。"
+					].join("\n")
+				});
+			} catch {}
+		}
 		// Normalize the validated config (the loader already filled schema
 		// defaults, but the class must stay robust when driven directly).
 		this.cfg = {
@@ -2353,7 +2783,7 @@ export class AgentCommanderService extends Service {
 /** Plugin identity for cordis.yml rows. */
 export const name = "dsh-agent-commander";
 /** Services required before mounting. */
-export const inject = ["webServer", "sessions", "webRuntime", "tools"];
+export const inject = ["webServer", "sessions", "webRuntime", "tools", "systemPrompt"];
 
 /**
  * Standard plugin entry: function form delegating to the Service class.
