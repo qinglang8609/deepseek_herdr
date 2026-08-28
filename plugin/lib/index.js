@@ -293,6 +293,22 @@ function ensureSpawnHelper() {
 // ---------------------------------------------------------------------------
 // Binary resolution for agent CLIs
 // ---------------------------------------------------------------------------
+function nvmNodeBins() {
+	// nvm-managed Node global bins: codebuddy/cbc are typically installed via
+	// `npm i -g @tencent-ai/codebuddy-code`, which puts them in
+	// ~/.nvm/versions/node/<version>/bin. The desktop host runs with a stripped
+	// PATH so those dirs are only reachable through an explicit glob.
+	const bins = [];
+	try {
+		const root = join(homedir(), ".nvm", "versions", "node");
+		for (const entry of readdirSync(root, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const bin = join(root, entry.name, "bin");
+			if (existsSync(bin)) bins.push(bin);
+		}
+	} catch {}
+	return bins;
+}
 function searchPathDirs() {
 	const dirs = [];
 	const pathEntries = (process.env.PATH ?? "").split(":");
@@ -300,6 +316,10 @@ function searchPathDirs() {
 	// Common agent CLI install dirs beyond PATH: ~/.local/bin (claude/codex),
 	// ~/.opencode/bin (opencode), homebrew, /usr/local.
 	for (const extra of [join(homedir(), ".local", "bin"), join(homedir(), ".opencode", "bin"), join(homedir(), ".claude", "local"), join(homedir(), ".codebuddy", "bin"), join(homedir(), ".pi", "bin"), join(homedir(), ".qwen", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]) if (!dirs.includes(extra)) dirs.push(extra);
+	// nvm node bins (codebuddy/cbc) — see nvmNodeBins().
+	for (const nodeBin of nvmNodeBins()) if (!dirs.includes(nodeBin)) dirs.push(nodeBin);
+	// Tencent WorkBuddy desktop bundle ships a `codebuddy` CLI at this path.
+	for (const extra of ["/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin"]) if (!dirs.includes(extra)) dirs.push(extra);
 	return dirs;
 }
 function resolveBinary(type) {
