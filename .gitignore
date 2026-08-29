@@ -2,3 +2,5 @@
 .claude/*
 .deepseek/*
 .DS_Store
+dist/
+*.tgz

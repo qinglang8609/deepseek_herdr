@@ -4,9 +4,12 @@
 // Registers the "Agent Radar" panel into the app's real right "details"
 // column (no floating overlay):
 //   • list every open agent with live status (working / idle / blocked / exited)
-//   • click an agent to open its live terminal (vendored xterm + WebSocket)
-//   • "+ 新建智能体" dialog: engine (claude/opencode/codex), name, role
-//     definition with presets, skill attachments, working directory
+//   • click an agent to open its read-only output tail + send box (plain <pre>,
+//     no xterm — output streams via the terminal WebSocket, input via REST)
+//   • herdr host badge + current workspace's herdr space tag
+//   • "+ 新建智能体" dialog: engine (herdr kinds / legacy types), name, role
+//     definition with presets, skill attachments, working directory; in herdr
+//     mode shows the target herdr space (auto-created on create when missing)
 //
 // Details-column caveat: AppFrame only gives the details track a width when
 // the current session is non-blank. A width-enforcement effect takes over the
@@ -34,7 +37,8 @@ const ICON_PATHS = {
 	"chevron-left": [["path", { d: "m15 18-6-6 6-6" }]],
 	"plus": [["path", { d: "M5 12h14" }], ["path", { d: "M12 5v14" }]],
 	"stop": [["rect", { x: 3, y: 3, width: 18, height: 18, rx: 2, fill: "currentColor", stroke: "none" }]],
-	"bot": [["path", { d: "M12 8V4H8" }], ["rect", { width: 16, height: 12, x: 4, y: 8, rx: 2 }], ["path", { d: "M2 14h2" }], ["path", { d: "M20 14h2" }], ["path", { d: "M15 13v2" }], ["path", { d: "M9 13v2" }]]
+	"bot": [["path", { d: "M12 8V4H8" }], ["rect", { width: 16, height: 12, x: 4, y: 8, rx: 2 }], ["path", { d: "M2 14h2" }], ["path", { d: "M20 14h2" }], ["path", { d: "M15 13v2" }], ["path", { d: "M9 13v2" }]],
+	"layout": [["rect", { width: 7, height: 7, x: 3, y: 3, rx: 1 }], ["rect", { width: 7, height: 7, x: 14, y: 3, rx: 1 }], ["rect", { width: 7, height: 7, x: 14, y: 14, rx: 1 }], ["rect", { width: 7, height: 7, x: 3, y: 14, rx: 1 }]]
 };
 
 function Icon({ name, size = 14, className = "" }) {
@@ -179,7 +183,8 @@ const STATUS_LABEL = {
 	idle: "空闲",
 	blocked: "受阻",
 	closing: "退出中…",
-	exited: "已退出"
+	exited: "已退出",
+	unknown: "未知"
 };
 
 // ---------------------------------------------------------------------------
@@ -317,116 +322,59 @@ function getRolePresets() {
 }
 
 // ---------------------------------------------------------------------------
-// ResizeObserver throttle helper — shared by AgentTerminal & MiniTerminal.
-// Coalesces rapid resize events into at most one callback per 200ms window.
+// TailView — lightweight read-only agent output (plain <pre>, NO xterm).
+//
+// Connects to the same terminal WebSocket; in herdr mode the backend serves a
+// 1.5s poll of `herdr agent read` (plain text), in legacy mode the raw PTY
+// stream. Renders text with ANSI stripped into a <pre> and caps the buffer —
+// this replaces the xterm rendering that froze the sidebar on long sessions.
+// Input happens in herdr / via the detail view's send box (REST), not here.
 // ---------------------------------------------------------------------------
-function makeThrottledResizeObserver(callbacks) {
-	let throttleTimer = null;
-	const observer = new ResizeObserver(() => {
-		if (throttleTimer !== null) return;
-		throttleTimer = setTimeout(() => {
-			throttleTimer = null;
-			for (const fn of callbacks) { try { fn(); } catch {} }
-		}, 200);
-	});
-	return {
-		observe(target) { observer.observe(target); },
-		disconnect() {
-			if (throttleTimer !== null) { clearTimeout(throttleTimer); throttleTimer = null; }
-			observer.disconnect();
-		}
-	};
+function stripAnsi(text) {
+	// eslint-disable-next-line no-control-regex
+	return String(text ?? "").replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
 }
 
-function AgentTerminal({ agentId, signalRef }) {
-	const containerRef = useRef(null);
-	const wsRef = useRef(null);
+function TailView({ agentId, compact }) {
+	const preRef = useRef(null);
+	const bufferRef = useRef("");
 	const [connected, setConnected] = useState(false);
 
 	useEffect(() => {
-		const container = containerRef.current;
-		if (container === null) return;
-		const { Terminal } = require_xterm();
-		const { FitAddon } = require_addon_fit();
-		const term = new Terminal({
-			scrollback: 10000,
-			cursorBlink: true,
-			fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-			fontSize: 13,
-			theme: {
-				background: "#0b0b10",
-				foreground: "#d6deeb",
-				cursor: "#82aaff",
-				cursorAccent: "#0b0b10",
-				selectionBackground: "#2d3a5f",
-				black: "#0b0b10",
-				red: "#ff7b72",
-				green: "#3fb950",
-				yellow: "#e3b341",
-				blue: "#82aaff",
-				magenta: "#d2a8ff",
-				cyan: "#39c5cf",
-				white: "#d6deeb",
-				brightBlack: "#4a4a5a",
-				brightRed: "#ff7b72",
-				brightGreen: "#3fb950",
-				brightYellow: "#e3b341",
-				brightBlue: "#82aaff",
-				brightMagenta: "#d2a8ff",
-				brightCyan: "#39c5cf",
-				brightWhite: "#ffffff"
-			}
-		});
-		const fit = new FitAddon();
-		term.loadAddon(fit);
-		term.open(container);
-		try {
-			fit.fit();
-		} catch {}
-
+		bufferRef.current = "";
+		const pre = preRef.current;
+		const MAX = compact === true ? 48 * 1024 : 256 * 1024;
 		let closed = false;
 		let ws = null;
 		let retry = 0;
 		let reconnectTimer = null;
-		let pinTimer = null;
-		const isAtBottom = () => {
-			try {
-				const buffer = term.buffer.active;
-				return buffer.baseY - buffer.viewY <= 1;
-			} catch {
-				return true;
-			}
+		let raf = 0;
+		const render = () => {
+			if (pre !== null) pre.textContent = bufferRef.current;
+			if (pre !== null) pre.scrollTop = pre.scrollHeight;
 		};
-		const pinToBottom = () => {
-			if (pinTimer !== null) return;
-			pinTimer = setTimeout(() => {
-				pinTimer = null;
-				try {
-					if (isAtBottom()) term.scrollToBottom();
-				} catch {}
-			}, 60);
+		const scheduleRender = () => {
+			if (raf !== 0) return;
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				render();
+			});
 		};
-		const sendResize = () => {
-			if (ws === null || ws.readyState !== WebSocket.OPEN) return;
-			try {
-				const dims = fit.proposeDimensions();
-				if (dims !== void 0) ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
-			} catch {}
+		const append = (text) => {
+			let next = bufferRef.current + text;
+			if (next.length > MAX) next = next.slice(-MAX);
+			bufferRef.current = next;
+			scheduleRender();
 		};
 		const connect = () => {
 			if (closed) return;
 			ws = new WebSocket(wsUrl(`/agent-commander/ws/terminal?id=${encodeURIComponent(agentId)}`));
-			wsRef.current = ws;
 			ws.onopen = () => {
 				retry = 0;
 				setConnected(true);
-				sendResize();
-				term.focus();
 			};
 			ws.onmessage = (e) => {
-				const write = (text) => {
-					term.write(text, pinToBottom);
-				};
+				const write = (text) => append(stripAnsi(text));
 				if (typeof e.data === "string") write(e.data);
 				else e.data.text().then(write).catch(() => {});
 			};
@@ -442,45 +390,25 @@ function AgentTerminal({ agentId, signalRef }) {
 				} catch {}
 			};
 		};
-		const dataDisposable = term.onData((data) => {
-			if (ws !== null && ws.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ type: "input", data }));
-			}
-		});
-		const resizeObserver = makeThrottledResizeObserver([fit.fit, sendResize, pinToBottom]);
-		resizeObserver.observe(container);
 		connect();
 		return () => {
 			closed = true;
 			if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-			if (pinTimer !== null) clearTimeout(pinTimer);
-			resizeObserver.disconnect();
-			dataDisposable.dispose();
+			if (raf !== 0) cancelAnimationFrame(raf);
 			try {
 				ws?.close();
 			} catch {}
-			wsRef.current = null;
-			term.dispose();
 		};
-	}, [agentId]);
+	}, [agentId, compact]);
 
-	const sendSignal = useCallback((signal) => {
-		if (wsRef.current !== null && wsRef.current.readyState === WebSocket.OPEN) {
-			wsRef.current.send(JSON.stringify({ type: "signal", signal }));
-		}
-	}, []);
-	useEffect(() => {
-		if (signalRef !== void 0) signalRef.current = sendSignal;
-		return () => { if (signalRef !== void 0) signalRef.current = void 0; };
-	}, [signalRef, sendSignal]);
-
-	return h("div", { className: "dhac_terminalWrap" }, [
+	return h("div", { className: compact === true ? "dhac_tailWrap dhac_tailWrapCompact" : "dhac_tailWrap" }, [
 		h("div", { className: "dhac_terminalBanner" }, [
 			h("span", { className: `dhac_termDot${connected ? " dhac_termDotOn" : ""}` }),
-			h("span", null, connected ? "已连接" : "连接中…"),
-			h("span", { style: { flex: "1" } })
+			h("span", null, connected ? "实时输出" : "连接中…"),
+			h("span", { style: { flex: "1" } }),
+			compact !== true && h("span", { className: "dhac_terminalHint" }, "输入请用下方发送框（在 herdr 中执行）")
 		]),
-		h("div", { ref: containerRef, className: "dhac_terminal" })
+		h("pre", { ref: preRef, className: "dhac_tail" })
 	]);
 }
 
@@ -496,6 +424,8 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 	const [binaries, setBinaries] = useState([]);
 	const [availableSkills, setAvailableSkills] = useState([]);
 	const [rolePresets, setRolePresets] = useState(DEFAULT_ROLE_PRESETS);
+	const [herdrSpace, setHerdrSpace] = useState(null);
+	const [herdrMode, setHerdrMode] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState(null);
 
@@ -506,16 +436,35 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 			setAvailableSkills(list);
 			setSkills(list.map((s) => s.path));
 		}).catch(() => {});
-		getPluginConfig().then(() => setRolePresets(getRolePresets()));
+		getPluginConfig().then(() => {
+			setRolePresets(getRolePresets());
+			setHerdrMode(pluginConfig?.herdrMode === true);
+		});
 	}, []);
+
+	// herdr 模式：显示目标工作目录对应的 herdr 空间（不存在则提示自动新建）。
+	useEffect(() => {
+		if (typeof cwd !== "string" || cwd === "") {
+			setHerdrSpace(null);
+			return;
+		}
+		let cancelled = false;
+		apiGet(`/herdr/workspace?cwd=${encodeURIComponent(cwd)}`).then((value) => {
+			if (!cancelled) setHerdrSpace(value?.workspace ?? null);
+		}).catch(() => {});
+		return () => { cancelled = true; };
+	}, [cwd]);
 
 	const toggleSkill = (path) => {
 		setSkills((current) => (current.includes(path) ? current.filter((p) => p !== path) : [...current, path]));
 	};
+	const engines = herdrMode && Array.isArray(pluginConfig?.herdrKinds) && pluginConfig.herdrKinds.length > 0
+		? pluginConfig.herdrKinds
+		: AGENT_TYPES;
 	const submit = async () => {
 		if (busy) return;
 		if (type === "") {
-			setError("请选择智能体引擎（claude / opencode / codex）");
+			setError(`请选择智能体引擎（${engines.join(" / ")}）`);
 			return;
 		}
 		setBusy(true);
@@ -533,14 +482,14 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 
 	return h("div", { className: "dhac_modal", onClick: (e) => { if (e.target === e.currentTarget) onClose(); } }, [
 		h("div", { className: "dhac_dialog" }, [
-			h("div", { className: "dhac_dialogTitle" }, "新建智能体"),
+			h("div", { className: "dhac_dialogTitle" }, herdrMode ? "新建智能体（herdr 空间）" : "新建智能体"),
 			h("div", { className: "dhac_dialogBody" }, [
 				h("div", { className: "dhac_field" }, [
 					h("label", { className: "dhac_fieldLabel" }, "引擎类型"),
 					h("select", { className: "dhac_select", value: type, onChange: (e) => setType(e.target.value) },
-						AGENT_TYPES.map((t) => {
+						engines.map((t) => {
 							const info = binaries.find((b) => b.type === t);
-							const available = info?.available === true;
+							const available = herdrMode ? true : info?.available === true;
 							return h("option", { key: t, value: t, disabled: !available }, available ? t : `${t}（未安装）`);
 						}))
 				]),
@@ -579,8 +528,16 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 					h("label", { className: "dhac_fieldLabel" }, "工作目录"),
 					h("input", { className: "dhac_input", value: cwd, placeholder: "默认：当前会话目录", onChange: (e) => setCwd(e.target.value) })
 				]),
+				herdrMode && h("div", { className: `dhac_hint dhac_herdrSpace${herdrSpace ? "" : " dhac_herdrSpaceNew"}` }, [
+					h(Icon, { name: herdrSpace ? "layout" : "plus", size: 11, className: "dhac_inlineIcon" }),
+					herdrSpace
+						? `herdr 空间 ${herdrSpace.workspaceId}（${herdrSpace.label}，${herdrSpace.paneCount} 面板）— 将复用并在其中新建智能体面板`
+						: "该目录暂无 herdr 空间 — 创建时将在 herdr 中自动新建空间与面板，并注入角色/技能简报"
+				]),
 				error !== null && h("div", { className: "dhac_error" }, error),
-				h("div", { className: "dhac_hint" }, "新建后该智能体会读取工作目录 .deepseek/ 下的 memory.md / task-board.md / experience.md，并遵循团队协作协议（完成后更新 task-board、产出写入 handoffs/、经验沉淀到 experience.md）。")
+				h("div", { className: "dhac_hint" }, herdrMode
+					? "智能体将运行在 herdr 后台 server（断开/重启不丢）。新建后会读取工作目录 .deepseek/ 下的 memory.md / task-board.md / experience.md，并遵循团队协作协议（完成后更新 task-board、产出写入 handoffs/、经验沉淀到 experience.md）。"
+					: "新建后该智能体会读取工作目录 .deepseek/ 下的 memory.md / task-board.md / experience.md，并遵循团队协作协议（完成后更新 task-board、产出写入 handoffs/、经验沉淀到 experience.md）。")
 			]),
 			h("div", { className: "dhac_dialogActions" }, [
 				h("button", { type: "button", className: "dhac_btn", onClick: onClose, disabled: busy }, "取消"),
@@ -591,122 +548,10 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 }
 
 // ---------------------------------------------------------------------------
-// Mini live terminal card (display-only xterm streaming the agent's output)
+// Mini live tail card (compact read-only TailView on each agent card)
 // ---------------------------------------------------------------------------
 function MiniTerminal({ agentId }) {
-	const containerRef = useRef(null);
-
-	useEffect(() => {
-		const container = containerRef.current;
-		if (container === null) return;
-		const { Terminal } = require_xterm();
-		const { FitAddon } = require_addon_fit();
-		const term = new Terminal({
-			scrollback: 2000,
-			fontSize: 11,
-			fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-			disableStdin: true,
-			convertEol: true,
-			theme: {
-				background: "#0b0b10",
-				foreground: "#d6deeb",
-				cursor: "#82aaff",
-				cursorAccent: "#0b0b10",
-				selectionBackground: "#2d3a5f",
-				black: "#0b0b10",
-				red: "#ff7b72",
-				green: "#3fb950",
-				yellow: "#e3b341",
-				blue: "#82aaff",
-				magenta: "#d2a8ff",
-				cyan: "#39c5cf",
-				white: "#d6deeb",
-				brightBlack: "#4a4a5a",
-				brightRed: "#ff7b72",
-				brightGreen: "#3fb950",
-				brightYellow: "#e3b341",
-				brightBlue: "#82aaff",
-				brightMagenta: "#d2a8ff",
-				brightCyan: "#39c5cf",
-				brightWhite: "#ffffff"
-			}
-		});
-		const fit = new FitAddon();
-		term.loadAddon(fit);
-		term.open(container);
-		try {
-			fit.fit();
-		} catch {}
-
-		let closed = false;
-		let ws = null;
-		let retry = 0;
-		let reconnectTimer = null;
-		let pinTimer = null;
-		// Scroll AFTER the write finished rendering — xterm renders large writes
-		// over several frames, so an immediate scrollToBottom lands mid-buffer.
-		const pinToBottom = () => {
-			if (pinTimer !== null) return;
-			pinTimer = setTimeout(() => {
-				pinTimer = null;
-				try {
-					term.scrollToBottom();
-				} catch {}
-			}, 60);
-		};
-		// Force the PTY to the card's tiny size — the thumbnail only displays
-		// correctly when the terminal window itself shrinks to the card dims.
-		// (The full detail view resizes it back when opened.)
-		const sendResize = () => {
-			if (ws === null || ws.readyState !== WebSocket.OPEN) return;
-			try {
-				const dims = fit.proposeDimensions();
-				if (dims !== void 0 && dims.cols > 0 && dims.rows > 0) {
-					ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
-				}
-			} catch {}
-		};
-		const connect = () => {
-			if (closed) return;
-			ws = new WebSocket(wsUrl(`/agent-commander/ws/terminal?id=${encodeURIComponent(agentId)}`));
-			ws.onopen = () => {
-				retry = 0;
-				sendResize();
-			};
-			ws.onmessage = (e) => {
-				const write = (text) => {
-					term.write(text, pinToBottom);
-				};
-				if (typeof e.data === "string") write(e.data);
-				else e.data.text().then(write).catch(() => {});
-			};
-			ws.onclose = () => {
-				if (closed) return;
-				retry = Math.min(retry + 1, 6);
-				reconnectTimer = setTimeout(connect, 500 * 2 ** retry);
-			};
-			ws.onerror = () => {
-				try {
-					ws.close();
-				} catch {}
-			};
-		};
-		connect();
-		const resizeObserver = makeThrottledResizeObserver([fit.fit, sendResize, pinToBottom]);
-		resizeObserver.observe(container);
-		return () => {
-			closed = true;
-			if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-			if (pinTimer !== null) clearTimeout(pinTimer);
-			resizeObserver.disconnect();
-			try {
-				ws?.close();
-			} catch {}
-			term.dispose();
-		};
-	}, [agentId]);
-
-	return h("div", { ref: containerRef, className: "dhac_miniTerm" });
+	return h(TailView, { agentId, compact: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -803,14 +648,28 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 				])
 				: (agent.exited
 					? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
-					: h("div", { className: "dhac_miniTermWrap" }, h(MiniTerminal, { agentId: agent.id })))
+					: h(MiniTerminal, { agentId: agent.id }))
 		]);
 	}));
 }
 
 function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
-	const signalRef = useRef(null);
+	const [draft, setDraft] = useState("");
+	const [sending, setSending] = useState(false);
 	const ghost = agent.running === false;
+	const sendText = async () => {
+		const text = draft.trim();
+		if (text === "" || sending) return;
+		setSending(true);
+		try {
+			await apiPost(`/agents/${encodeURIComponent(agent.id)}/send`, { text, submit: true });
+			setDraft("");
+		} catch {}
+		setSending(false);
+	};
+	const signalInt = () => {
+		apiPost(`/agents/${encodeURIComponent(agent.id)}/signal`, { signal: "SIGINT" }).catch(() => {});
+	};
 	return h("div", { className: "dhac_root" }, [
 		h("div", { className: "dhac_toolbar" }, [
 			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, h(Icon, { name: "chevron-left", size: 14 })),
@@ -820,7 +679,7 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 })),
 			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, h(Icon, { name: "minimize", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "rotate-ccw", size: 13 })),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, h(Icon, { name: "stop", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: signalInt }, h(Icon, { name: "stop", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 }))
 		]),
 		ghost
@@ -836,7 +695,19 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			])
 			: (agent.exited
 				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
-				: h(AgentTerminal, { agentId: agent.id, signalRef }))
+				: h("div", { className: "dhac_termBody" }, [
+					h(TailView, { agentId: agent.id }),
+					h("div", { className: "dhac_sendBox" }, [
+						h("input", {
+							className: "dhac_input",
+							value: draft,
+							placeholder: "输入指令，回车发送（经 herdr 执行）…",
+							onChange: (e) => setDraft(e.target.value),
+							onKeyDown: (e) => { if (e.key === "Enter") sendText(); }
+						}),
+						h("button", { type: "button", className: "dhac_btn dhac_btnPrimary", onClick: sendText, disabled: sending }, sending ? "发送中…" : "发送")
+					])
+				]))
 	]);
 }
 
@@ -888,6 +759,8 @@ function RadarPanel(props) {
 	const [workspaceCwd, setWorkspaceCwd] = useState(void 0);
 	const [savedGhosts, setSavedGhosts] = useState([]);
 	const [scanning, setScanning] = useState(false);
+	const [herdrInfo, setHerdrInfo] = useState({ available: false, version: null });
+	const [herdrSpace, setHerdrSpace] = useState(null);
 	const { rootRef, onDragStart } = useDetailsColumn();
 	const sessionId = props.sessionId;
 	const sessionCwd = typeof props.useSessions === "function"
@@ -933,6 +806,31 @@ function RadarPanel(props) {
 		setListCwd(cwd);
 		reDetect(cwd);
 	}, [sessionCwd, reDetect]);
+
+	// herdr 状态徽标（头部）：host 是 herdr 还是本地进程。
+	useEffect(() => {
+		apiGet("/herdr/status").then((value) => {
+			setHerdrInfo({
+				available: value?.available === true,
+				version: value?.version ?? null,
+				agentHost: value?.agentHost ?? "auto"
+			});
+		}).catch(() => {});
+	}, []);
+
+	// 当前工作区对应的 herdr 空间（不存在则显示“新建时自动创建”）。
+	useEffect(() => {
+		const cwd = typeof sessionCwd === "string" && sessionCwd !== "" ? sessionCwd : void 0;
+		if (cwd === void 0) {
+			setHerdrSpace(null);
+			return;
+		}
+		let cancelled = false;
+		apiGet(`/herdr/workspace?cwd=${encodeURIComponent(cwd)}`).then((value) => {
+			if (!cancelled) setHerdrSpace(value?.workspace ?? null);
+		}).catch(() => {});
+		return () => { cancelled = true; };
+	}, [sessionCwd]);
 
 	// Status notifications: diff the pushed list and toast meaningful
 	// transitions. The diff is reset whenever the workspace scope changes, so
@@ -1012,6 +910,12 @@ function RadarPanel(props) {
 		h("div", { className: "dhac_resizeHandle", title: "拖拽调整宽度", onPointerDown: onDragStart }),
 		h("div", { className: "dhac_header" }, [
 			h("span", { className: "dhac_headerTitle" }, "智能体雷达"),
+			h("span", {
+				className: herdrInfo.available ? "dhac_hostBadge dhac_hostBadgeOn" : "dhac_hostBadge",
+				title: herdrInfo.available
+					? `智能体宿主：herdr v${herdrInfo.version ?? "?"}（后台 server 持有进程）`
+					: "智能体宿主：DSH 本地进程（未检测到 herdr）"
+			}, herdrInfo.available ? `herdr v${herdrInfo.version ?? "?"}` : "本地进程"),
 			h("span", { className: "dhac_count" }, String(merged.length)),
 			h("button", { type: "button", className: "dhac_iconButton", title: "重新检测本文件夹的智能体列表", onClick: () => reDetect(workspaceCwd), disabled: scanning },
 				h(Icon, { name: "refresh-cw", size: 13, className: scanning ? "dhac_spin" : "" })),
@@ -1022,7 +926,11 @@ function RadarPanel(props) {
 		]),
 		h("div", { className: "dhac_workspace", title: workspaceCwd ?? "未绑定工作区（显示全部智能体）" }, [
 			h(Icon, { name: "folder", size: 12, className: "dhac_inlineIcon" }),
-			h("span", null, `${workspaceLabel}${scanning ? " · 检测中…" : ""}`)
+			h("span", null, `${workspaceLabel}${scanning ? " · 检测中…" : ""}`),
+			herdrSpace !== null && h("span", { className: "dhac_herdrSpaceTag", title: `herdr 空间 ${herdrSpace.workspaceId}（${herdrSpace.label}，${herdrSpace.paneCount} 面板）` }, [
+				h(Icon, { name: "layout", size: 11, className: "dhac_inlineIcon" }),
+				`空间 ${herdrSpace.workspaceId}`
+			])
 		]),
 		h("div", { className: "dhac_toasts" },
 			toasts.map((t) =>

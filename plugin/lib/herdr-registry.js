@@ -57,6 +57,11 @@ export class HerdrAgentRegistry {
 		this.baseCwd = opts.baseCwd ?? process.cwd();
 		this.onSpawn = typeof opts.onSpawn === "function" ? opts.onSpawn : null;
 		this.projectRootOf = typeof opts.projectRootOf === "function" ? opts.projectRootOf : null;
+		this.herdrMode = true;
+		this.adapter.version = opts.herdrVersion ?? null;
+		this.adapter.selftest().then((r) => {
+			this.adapter.version = r.version ?? this.adapter.version;
+		}).catch(() => {});
 		this.agents = new Map();          // DSH id → handle
 		this.listeners = new Set();
 		this._polling = false;
@@ -64,6 +69,18 @@ export class HerdrAgentRegistry {
 		this._workspaceCache = new Map(); // cwd → { workspaceId, rootPaneId }
 		this._pollTimer = setInterval(() => { this.refresh().catch(() => {}); }, POLL_MS);
 		this.refresh().catch(() => {});
+	}
+
+	/** Find the herdr workspace whose panes live in `cwd` (never creates). */
+	async findWorkspace(cwd) {
+		const wss = await this.adapter.workspaceList();
+		for (const ws of wss?.workspaces ?? []) {
+			const panes = await this.adapter.paneList(ws.workspace_id);
+			if ((panes?.panes ?? []).some((p) => p.cwd === cwd)) {
+				return { workspaceId: ws.workspace_id, label: ws.label, paneCount: (panes?.panes ?? []).length };
+			}
+		}
+		return null;
 	}
 
 	// ------------------------------------------------------------------ meta
@@ -124,7 +141,11 @@ export class HerdrAgentRegistry {
 		const { workspaceId, rootPaneId } = await this.ensureWorkspace(targetCwd);
 		let paneId = await this.findFreePane(workspaceId, targetCwd);
 		if (paneId === null) {
-			const split = await this.adapter.paneSplit(rootPaneId, "right", targetCwd);
+			// 窗口排版：复用已释放的空面板；否则从根面板 split。方向按当前
+			// 面板数交替（偶数→右侧分栏，奇数→下方分栏），形成可用网格。
+			const panes = await this.adapter.paneList(workspaceId);
+			const direction = ((panes?.panes?.length ?? 1) % 2 === 0) ? "down" : "right";
+			const split = await this.adapter.paneSplit(rootPaneId, direction, targetCwd);
 			paneId = split?.pane?.pane_id ?? null;
 			if (paneId === null) throw new Error("无法在 herdr 中创建面板（pane split 失败）");
 		}

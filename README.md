@@ -75,10 +75,26 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 
 1. 重启后，右侧「智能体雷达」面板自动打开（主界面右上角有悬浮「🤖 雷达」按钮可弹出/收起）
 2. 点「＋ 新建」→ 选引擎、写角色（如"数据库专家"）、勾选技能 → 创建
-3. 点击智能体行展开实时终端，直接和它对话
+3. 点击智能体行展开实时输出（只读 tail + 发送框），直接下达指令
 4. 对 DeepSeek 说：
    > "用 agent_open 打开一个 opencode，角色定为前端专家，派它修复 xx 页面的样式问题"
 5. 切换工作区时，雷达会自动重新检测新文件夹的智能体列表
+
+## 🛰 herdr 集成（智能体宿主迁移）
+
+默认（`agentHost: auto`）当检测到 herdr 已安装时，智能体不再由本插件的 node-pty
+进程托管，而是跑在 **herdr 后台 server** 里 —— 断开/重启/页面卡死都不丢进程，
+总指挥通过 `herdr` CLI 走 socket API 监控协作，根治「侧边栏窗口小、长跑卡死」：
+
+- 头部显示宿主徽标 `herdr v0.8.2`（未检测到则显示「本地进程」）
+- 侧边栏监控 **与当前工作区一致的 herdr 空间**（`空间 wD` 标签；无则新建时自动创建）
+- 新建智能体 = 确保 herdr 空间 → 按面板数交替 split 排版 → `agent start` →
+  注入角色/技能简报（等 agent 就绪后自动回车执行）
+- 智能体终端改为**只读 tail（纯文本，非 xterm）** + 发送框，长会话不再卡
+- 支持的引擎：claude / opencode / codex / qwen / pi（herdr kinds；需
+  `herdr integration install <kind>` 装上状态上报集成）
+
+> 设计文档：`docs/herdr-integration-dev.md` ｜ 不想用 herdr 可设 `agentHost: "legacy"` 回退 node-pty 模式。
 
 ## ⚙️ 配置（Config schema）
 
@@ -88,6 +104,7 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 - id: agent-commander
   config:
     maxAgents: 12              # 同时打开的最大智能体数（默认 8）
+    agentHost: auto            # auto | herdr | legacy（智能体宿主，默认 auto 优先 herdr）
     rolePresets:
       - 数据库专家
       - 安全专家              # 自定义预设会出现在「新建智能体」弹窗里
@@ -97,20 +114,35 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 
 完整字段表见 [plugin/README.md](plugin/README.md#配置config-schema)。
 
+## 📦 发布流程
+
+```bash
+node scripts/release.mjs patch     # patch | minor | major | 显式版本号；需在 main 分支、工作区干净
+node scripts/release.mjs --no-commit --allow-branch   # 试跑：构建+升版本+打包，不提交不打 tag
+```
+
+脚本自动完成：构建 client bundle → 同步 plugin/ 与根 package.json 版本 →
+`pnpm pack`（失败自动回退 `npm pack`，缓存指向 dist/ 绕开权限问题）→
+git commit `release: vX.Y.Z` + tag → 输出发布清单（push remote + `dsh plugin add github:…`）。
+打包产物在 `dist/`（已 gitignore）。
+
 ## 🔧 开发
 
 ```
 plugin/
 ├── lib/
-│   ├── index.js          # node 端：Config schema + AgentRegistry + 共享记忆 + agent_* 工具 + WS/HTTP 路由
+│   ├── index.js          # node 端：Config schema + AgentRegistry(legacy) + 共享记忆 + agent_* 工具 + WS/HTTP 路由
+│   ├── herdr-adapter.js  # herdr CLI 封装（binary 发现 / probe / JSON 信封 / 错误分类 / 超时）
+│   ├── herdr-registry.js # herdr 宿主注册表门面（与 AgentRegistry 同接口，供 agent_* 工具/API/WS 消费）
 │   └── client.js         # client bundle（构建产物，勿手改）
-├── src/client/           # client 源码（app.js 雷达面板 / panel.css / vendor 内联 xterm）
+├── src/client/           # client 源码（app.js 雷达面板 / panel.css；无 xterm，只读 tail 渲染）
 ├── skill/agent-commander/skill.md  # 总指挥 skill（随插件包分发，启动时自动装到 ~/.agents/skills/）
 ├── scripts/build-client.mjs  # 组装 client.js
 ├── cordis.patch.yml      # 激活补丁
 └── package.json
 templates/experience.md   # 经验总结模板
 install.sh                # 一键安装脚本
+scripts/release.mjs       # 发布流程（构建+升版本+打包+commit/tag+清单）
 ```
 
 改完 client 源码后重新构建：

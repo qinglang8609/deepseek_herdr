@@ -22,6 +22,10 @@
     "plugin/cordis.patch.yml",
     "plugin/README.md"
   ],
+  "scripts": {
+    "release": "node scripts/release.mjs",
+    "build": "node plugin/scripts/build-client.mjs"
+  },
   "engines": {
     "node": ">=20"
   },

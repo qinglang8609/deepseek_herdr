@@ -29,7 +29,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { Service } from "@deepseek-ai/cordis";
 import Schema from "@deepseek-ai/schemastery";
 import { HerdrAdapter } from "./herdr-adapter.js";
-import { HerdrAgentRegistry } from "./herdr-registry.js";
+import { HerdrAgentRegistry, HERDR_KIND_MAP } from "./herdr-registry.js";
 
 const require = createRequire(import.meta.url);
 
@@ -2351,10 +2351,31 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}) {
 					baseCwd: registry.baseCwd,
 					memoryDir: registry.memoryDir,
 					agentTypes: AGENT_TYPES,
+					herdrMode: registry.herdrMode === true,
+					herdrVersion: registry.herdrMode === true ? (registry.adapter?.version ?? null) : null,
+					herdrKinds: Object.keys(HERDR_KIND_MAP),
 					apiPrefix: API_PREFIX,
 					wsTerminal: WS_TERMINAL,
 					wsList: WS_LIST
 				} });
+				return;
+			}
+			if (req.method === "GET" && path === "/herdr/status") {
+				writeOk(res, {
+					available: registry.herdrMode === true,
+					version: registry.herdrMode === true ? (registry.adapter?.version ?? null) : null,
+					agentHost: cfg.agentHost ?? "auto",
+					kinds: Object.keys(HERDR_KIND_MAP)
+				});
+				return;
+			}
+			if (req.method === "GET" && path === "/herdr/workspace") {
+				const cwd = url.searchParams.get("cwd") ?? "";
+				if (cwd === "" || registry.herdrMode !== true || typeof registry.findWorkspace !== "function") {
+					writeOk(res, { workspace: null });
+					return;
+				}
+				writeOk(res, { workspace: await registry.findWorkspace(cwd) });
 				return;
 			}
 			if (req.method === "GET" && path === "/agents") {

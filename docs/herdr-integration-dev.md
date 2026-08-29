@@ -143,13 +143,20 @@ class HerdrAdapter {
 | `agent_broadcast` | 循环 agentPrompt | — |
 | `agent_compact` | prompt /compact（claude/qwen/pi） | codebuddy 无 herdr kind |
 
-## 8. 前端改造（阶段 B，本次不落地）
+## 8. 前端改造（阶段 B，本次已落地）
 
-1. 删除 xterm vendor 与 `attachTerminal` WS 流（卡死根因）
-2. 列表按 workspace 分组；行内显示 pane id / workspace / 状态徽标
-3. 详情区 = 只读 tail（`<pre>` 纯文本，1-2s 轮询）+ 发送框 + 操作按钮
-4. 新建弹窗引擎列表改为 herdr kinds；cwd 选择自动建 workspace
-5. 头部数据源标识 `herdr · wG`，断连重连状态
+1. ✅ 删除 xterm vendor（bundle 457KB → 70KB）与 `attachTerminal` 的 xterm 渲染；终端改为
+   **TailView**：纯文本 `<pre>` + ANSI 剥离 + 缓冲区上限（compact 48KB / 详情 256KB），
+   走同一 terminal WS（herdr 模式 = 后端 1.5s 轮询 `agent read`），根治长会话卡死
+2. ✅ 列表按当前工作区过滤（沿用 `?cwd=` 的 list WS），头部显示 **herdr 宿主徽标**
+   （`herdr v0.8.2` / 本地进程）+ 当前工作区对应的 **herdr 空间标签**（`空间 wD`）
+3. ✅ 详情区 = 只读 tail + **发送框**（REST `/agents/{id}/send`，herdr 中执行）+ 操作按钮
+   （压缩/清空/中断/关闭，中断改走 REST signal，因 herdr WS 忽略 signal 帧）
+4. ✅ 新建弹窗：herdr 模式下引擎列表 = herdr kinds（claude/opencode/codex/qwen/pi），
+   显示目标 herdr 空间状态（存在→复用；不存在→「创建时自动新建」）；角色预设/技能勾选保留
+5. ✅ 后端新增 `GET /herdr/status`、`GET /herdr/workspace?cwd=`，`/config` 增加
+   `herdrMode/herdrVersion/herdrKinds`；`HerdrAgentRegistry.findWorkspace()`（只查不建）；
+   新建面板排版：面板数偶数→split right，奇数→split down（网格布局）
 
 ## 9. 实施阶段与验收
 
