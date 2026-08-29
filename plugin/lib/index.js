@@ -28,6 +28,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { Service } from "@deepseek-ai/cordis";
 import Schema from "@deepseek-ai/schemastery";
+import { HerdrAdapter } from "./herdr-adapter.js";
+import { HerdrAgentRegistry } from "./herdr-registry.js";
 
 const require = createRequire(import.meta.url);
 
@@ -414,7 +416,13 @@ export const Config = Schema.object({
 	/** Default project root when the session has no working directory. */
 	baseCwd: Schema.string().default(""),
 	/** Shared-memory directory name placed under each project root. */
-	memoryDir: Schema.string().default(MEMORY_DIR)
+	memoryDir: Schema.string().default(MEMORY_DIR),
+	/**
+	 * Agent host backend: "auto" prefers herdr when its binary is installed,
+	 * "herdr" forces herdr mode, "legacy" keeps the node-pty host. Agents run
+	 * inside the herdr server (survive GUI restarts); see docs/herdr-integration-dev.md.
+	 */
+	agentHost: Schema.union(["auto", "herdr", "legacy"]).default("auto")
 });
 
 const MEMORY_FILES = {
@@ -1888,11 +1896,11 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 				text: `Opened agent "${value.name}" (${value.type}, id: ${value.id})${value.role ? `\n角色：${value.role}` : ""}. 已在右侧「智能体雷达」面板可见。用 agent_send 派活，agent_read 收结果。`
 			}]
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
 			const sessionId = exec.agent?.session?.id;
 			const cwd = sessionCwdOf(ctx, sessionId, args.cwd);
-			const handle = registry.create({
+			const handle = await registry.create({
 				type: args.type,
 				name: args.name,
 				role: args.role,
@@ -1901,7 +1909,7 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 				cols: 80,
 				rows: 24
 			});
-			return Promise.resolve({ id: handle.id, name: handle.name, type: handle.type, role: handle.role });
+			return { id: handle.id, name: handle.name, type: handle.type, role: handle.role };
 		}
 	}));
 	register(defineTool({
@@ -2029,10 +2037,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已发送给智能体 ${value.id}${value.submitted ? "（并回车提交）" : ""}。用 agent_read 观察输出。` }]
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
-			registry.send(args.id, args.text, args.submit === true);
-			return Promise.resolve({ id: args.id, submitted: args.submit === true });
+			await registry.send(args.id, args.text, args.submit === true);
+			return { id: args.id, submitted: args.submit === true };
 		}
 	}));
 	register(defineTool({
@@ -2077,21 +2085,21 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 				}];
 			}
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
 			const ids = Array.isArray(args.ids) ? args.ids.filter((s) => typeof s === "string" && s !== "") : [];
 			const submit = args.submit !== false;
 			const results = [];
 			for (const id of ids) {
 				try {
-					registry.send(id, String(args.text ?? ""), submit);
+					await registry.send(id, String(args.text ?? ""), submit);
 					const handle = registry.get(id);
 					results.push({ id, name: handle?.name ?? id, sent: true, error: null });
 				} catch (error) {
 					results.push({ id, name: id, sent: false, error: error instanceof Error ? error.message : String(error) });
 				}
 			}
-			return Promise.resolve(results);
+			return results;
 		}
 	}));
 	register(defineTool({
@@ -2120,10 +2128,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送 ${value.signal}。` }]
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
-			registry.signal(args.id, args.signal);
-			return Promise.resolve({ id: args.id, signal: args.signal });
+			await registry.signal(args.id, args.signal);
+			return { id: args.id, signal: args.signal };
 		}
 	}));
 	register(defineTool({
@@ -2147,10 +2155,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `智能体 ${value.id} 已关闭。` }]
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
-			registry.close(args.id);
-			return Promise.resolve({ id: args.id, closed: true });
+			await registry.close(args.id);
+			return { id: args.id, closed: true };
 		}
 	}));
 	register(defineTool({
@@ -2178,10 +2186,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送确认「${value.choice}」并回车。` }]
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
-			registry.approve(args.id, args.choice);
-			return Promise.resolve({ id: args.id, choice: args.choice ?? "1" });
+			await registry.approve(args.id, args.choice);
+			return { id: args.id, choice: args.choice ?? "1" };
 		}
 	}));
 	register(defineTool({
@@ -2205,10 +2213,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送压缩会话命令。` }]
 		},
-		execute: (args, exec) => {
+		execute: async (args, exec) => {
 			exec.signal.throwIfAborted();
-			registry.compactSession(args.id);
-			return Promise.resolve({ id: args.id, compacted: true });
+			await registry.compactSession(args.id);
+			return { id: args.id, compacted: true };
 		}
 	}));
 	register(defineTool({
@@ -2387,7 +2395,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}) {
 			if (req.method === "POST" && path === "/agents") {
 				const body = await rb(req);
 				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
-				const handle = registry.create({
+				const handle = await registry.create({
 					type: String(body.type ?? ""),
 					name: body.name,
 					role: body.role,
@@ -2405,7 +2413,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}) {
 			if (req.method === "DELETE" && path.startsWith("/agents/")) {
 				const id = path.slice("/agents/".length);
 				const graceful = url.searchParams.get("graceful") === "1";
-				registry.close(id, graceful);
+				await registry.close(id, graceful);
 				writeOk(res, { id, closed: true, graceful });
 				return;
 			}
@@ -2415,34 +2423,34 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}) {
 				const [, id, op] = agentMatch;
 				if (op === "send" && req.method === "POST") {
 					const body = await rb(req);
-					registry.send(id, String(body.text ?? ""), body.submit === true);
+					await registry.send(id, String(body.text ?? ""), body.submit === true);
 					writeOk(res, { id, submitted: body.submit === true });
 					return;
 				}
 				if (op === "read" && req.method === "GET") {
 					const bytes = Number(url.searchParams.get("bytes") ?? 12000);
-					writeOk(res, registry.read(id, Number.isFinite(bytes) ? bytes : 12000));
+					writeOk(res, await registry.read(id, Number.isFinite(bytes) ? bytes : 12000));
 					return;
 				}
 				if (op === "approve" && req.method === "POST") {
 					const body = await rb(req);
-					registry.approve(id, body.choice === void 0 ? "1" : String(body.choice));
+					await registry.approve(id, body.choice === void 0 ? "1" : String(body.choice));
 					writeOk(res, { id, choice: body.choice === void 0 ? "1" : String(body.choice) });
 					return;
 				}
 				if (op === "signal" && req.method === "POST") {
 					const body = await rb(req);
-					registry.signal(id, String(body.signal ?? ""));
+					await registry.signal(id, String(body.signal ?? ""));
 					writeOk(res, { id, signal: body.signal });
 					return;
 				}
 				if (op === "new-session" && req.method === "POST") {
-					registry.newSession(id);
+					await registry.newSession(id);
 					writeOk(res, { id, newSession: true });
 					return;
 				}
 				if (op === "compact" && req.method === "POST") {
-					registry.compactSession(id);
+					await registry.compactSession(id);
 					writeOk(res, { id, compacted: true });
 					return;
 				}
@@ -2520,7 +2528,13 @@ function registerWebsockets(ctx, registry, fence, cfg = {}) {
 				socket.destroy();
 				return;
 			}
-			terminalWss.handleUpgrade(req, socket, head, (ws) => attachTerminal(registry, ws, req, cfg));
+			terminalWss.handleUpgrade(req, socket, head, (ws) => {
+				if (cfg.herdrMode === true) {
+					attachHerdrTerminal(registry, ws, req);
+				} else {
+					attachTerminal(registry, ws, req, cfg);
+				}
+			});
 		}
 	}), "dsh-agent-commander: terminal WebSocket");
 	ctx.effect(() => ctx.webServer.registerUpgrade({
@@ -2537,6 +2551,59 @@ function registerWebsockets(ctx, registry, fence, cfg = {}) {
 		terminalWss.close();
 		listWss.close();
 	}, "dsh-agent-commander: websocket teardown");
+}
+
+/**
+ * herdr-mode terminal attachment: read-only tail. The sidebar keeps showing
+ * agent output, but there is no xterm/PTY stream — a 1.5s poll of
+ * `registry.read` (herdr agent read) replaces the legacy WebSocket PTY pipe,
+ * which is the source of the long-session rendering freeze. Only `close`
+ * frames are honored; input/resize are ignored (typing happens in herdr).
+ */
+function attachHerdrTerminal(registry, ws, req) {
+	try {
+		const url = new URL(req.url ?? "/", "http://dsh.internal");
+		const id = url.searchParams.get("id");
+		const handle = registry.get(id ?? "");
+		if (handle === void 0) {
+			ws.close(1011, "agent not found");
+			return;
+		}
+		const { WebSocket } = getWs();
+		let last = "";
+		let timer = null;
+		const poll = async () => {
+			if (ws.readyState !== WebSocket.OPEN) return;
+			try {
+				const result = await registry.read(handle.id, 20000);
+				if (result.output !== last) {
+					last = result.output;
+					if (ws.readyState === WebSocket.OPEN) ws.send(result.output);
+				}
+			} catch {}
+		};
+		poll();
+		timer = setInterval(poll, 1500);
+		ws.on("message", (data) => {
+			let control = null;
+			try {
+				const parsed = JSON.parse(data.toString("utf8"));
+				if (parsed !== null && typeof parsed === "object") control = parsed;
+			} catch {}
+			if (control === null || typeof control.type !== "string") return;
+			if (control.type === "close") {
+				registry.close(handle.id, control.graceful === true).catch(() => {});
+			}
+		});
+		ws.on("close", () => {
+			if (timer !== null) clearInterval(timer);
+		});
+		ws.on("error", () => {
+			if (timer !== null) clearInterval(timer);
+		});
+	} catch (error) {
+		ws.close(1011, error instanceof Error ? error.message : String(error));
+	}
 }
 
 function attachList(registry, ws, req) {
@@ -2654,7 +2721,7 @@ export class AgentCommanderService extends Service {
 		// bare tool schemas and never learns the workflow (reported: 新对话里
 		// 不知道怎么找到智能体、怎么操作智能体). The registration is auto-disposed
 		// when the plugin unloads, per the Cordis lifecycle.
-		if (this.nodePty !== null) {
+		if (this.nodePty !== null || this.herdrMode) {
 			try {
 				ctx.systemPrompt.section({
 					name: "dsh-agent-commander:team",
@@ -2681,10 +2748,21 @@ export class AgentCommanderService extends Service {
 			allowedSignals: Array.isArray(config.allowedSignals) && config.allowedSignals.length > 0 ? config.allowedSignals : [...ALLOWED_SIGNALS],
 			rolePresets: Array.isArray(config.rolePresets) && config.rolePresets.length > 0 ? config.rolePresets : [...ROLE_PRESETS],
 			baseCwd: typeof config.baseCwd === "string" && config.baseCwd !== "" ? config.baseCwd : process.cwd(),
-			memoryDir: typeof config.memoryDir === "string" && config.memoryDir !== "" ? config.memoryDir : MEMORY_DIR
+			memoryDir: typeof config.memoryDir === "string" && config.memoryDir !== "" ? config.memoryDir : MEMORY_DIR,
+			agentHost: config.agentHost === "herdr" || config.agentHost === "legacy" ? config.agentHost : "auto"
 		};
 		this.baseCwd = this.cfg.baseCwd;
 		this.memoryDir = this.cfg.memoryDir;
+		// Agent host selection: herdr preferred when its binary is installed
+		// (auto), forced by config ("herdr"), or disabled ("legacy"). herdr
+		// mode keeps agents in the herdr server — they survive DSH GUI
+		// restarts and are reachable via `herdr` CLI regardless of the UI.
+		this.herdrAdapter = null;
+		this.herdrMode = false;
+		if (this.cfg.agentHost !== "legacy" && HerdrAdapter.findBinary() !== null) {
+			this.herdrMode = true;
+			this.herdrAdapter = new HerdrAdapter();
+		}
 		// 项目根目录 = 创建智能体时所在会话的工作目录。所有智能体配置收拢到
 		// 项目根 <memoryDir>/agents.json（即使智能体 cwd 是子目录），保证配置
 		// 都在用户所指的项目根目录下。
@@ -2704,22 +2782,47 @@ export class AgentCommanderService extends Service {
 		this.stores = new Map();
 		this.baseStore = new MemoryStore(this.baseCwd, this.memoryDir);
 		this.stores.set(this.baseCwd, this.baseStore);
-		this.registry = new AgentRegistry(this.nodePty, this.cfg.maxAgents, this.baseCwd, (cwd) => this.storeFor(cwd), (handle) => this.projectRootOf(handle), {
-			transcriptLimit: this.cfg.transcriptLimit,
-			allowedSignals: this.cfg.allowedSignals,
-			memoryDir: this.memoryDir
-		});
+		if (this.herdrMode) {
+			this.registry = new HerdrAgentRegistry(this.herdrAdapter, {
+				maxAgents: this.cfg.maxAgents,
+				transcriptLimit: this.cfg.transcriptLimit,
+				allowedSignals: this.cfg.allowedSignals,
+				memoryDir: this.memoryDir,
+				baseCwd: this.baseCwd,
+				onSpawn: (cwd) => {
+					try {
+						seedSharedMemory(cwd, this.memoryDir);
+					} catch {}
+				}
+			});
+			ctx.logger?.info?.("[dsh-agent-commander] agent host = herdr");
+			this.herdrAdapter.selftest().then((r) => {
+				if (!r.ok) {
+					ctx.logger?.warn?.(`[dsh-agent-commander] herdr 自检未通过（${r.reason}），agent 操作可能失败；可在配置中设 agentHost: "legacy" 回退`);
+				}
+			}).catch(() => {});
+		} else {
+			if (this.cfg.agentHost === "herdr") {
+				ctx.logger?.warn?.("[dsh-agent-commander] 配置要求 agentHost=herdr 但未找到 herdr 二进制，已回退 legacy 模式");
+			}
+			this.registry = new AgentRegistry(this.nodePty, this.cfg.maxAgents, this.baseCwd, (cwd) => this.storeFor(cwd), (handle) => this.projectRootOf(handle), {
+				transcriptLimit: this.cfg.transcriptLimit,
+				allowedSignals: this.cfg.allowedSignals,
+				memoryDir: this.memoryDir
+			});
+		}
 		const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts);
 		const resolveCwd = (sessionId) => sessionCwdOf(ctx, sessionId);
 		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd, this.cfg);
-		registerWebsockets(ctx, this.registry, fence, this.cfg);
+		registerWebsockets(ctx, this.registry, fence, { ...this.cfg, herdrMode: this.herdrMode });
 		let toolsDisposers = null;
-		if (this.nodePty !== null) {
+		if (this.nodePty !== null || this.herdrMode) {
 			toolsDisposers = registerTools(ctx, this.registry, (cwd) => this.storeFor(cwd), resolveCwd);
 		}
 		// Restore agents that were open before the app restarted (state saved in
-		// <memoryDir>/agents.json on shutdown).
-		if (this.nodePty !== null) {
+		// <memoryDir>/agents.json on shutdown). herdr mode needs no restore —
+		// the herdr server keeps the processes alive across restarts.
+		if (this.nodePty !== null && !this.herdrMode) {
 			this.registry.restoreState();
 		}
 		ctx.effect(() => () => {
@@ -2746,32 +2849,32 @@ export class AgentCommanderService extends Service {
 		return this.registry.list();
 	}
 	/** Open a new agent; returns its meta. */
-	open(opts) {
-		const handle = this.registry.create(opts);
+	async open(opts) {
+		const handle = await this.registry.create(opts);
 		return this.registry.meta(handle);
 	}
 	/** Send text to an agent (submit=true presses Enter). */
-	send(id, text, submit) {
-		this.registry.send(id, text, submit === true);
+	async send(id, text, submit) {
+		await this.registry.send(id, text, submit === true);
 		return { id };
 	}
 	/** Read an agent's recent output (ANSI-stripped). */
-	read(id, bytes) {
+	async read(id, bytes) {
 		return this.registry.read(id, bytes);
 	}
 	/** Click-confirm a prompt (default choice "1" = Yes). */
-	approve(id, choice) {
-		this.registry.approve(id, choice);
+	async approve(id, choice) {
+		await this.registry.approve(id, choice);
 		return { id };
 	}
 	/** Send a whitelisted signal (SIGINT/SIGTSTP/SIGTERM). */
-	signal(id, signal) {
-		this.registry.signal(id, signal);
+	async signal(id, signal) {
+		await this.registry.signal(id, signal);
 		return { id };
 	}
 	/** Close an agent (graceful = ask it to /exit first). */
-	close(id, graceful) {
-		this.registry.close(id, graceful === true);
+	async close(id, graceful) {
+		await this.registry.close(id, graceful === true);
 		return { id };
 	}
 	/** Get one agent's live status/meta (null when unknown). */
@@ -2795,7 +2898,8 @@ export class AgentCommanderService extends Service {
 			allowedSignals: this.registry.allowedSignals,
 			rolePresets: this.cfg.rolePresets,
 			baseCwd: this.baseCwd,
-			memoryDir: this.memoryDir
+			memoryDir: this.memoryDir,
+			agentHost: this.cfg.agentHost
 		};
 	}
 }
