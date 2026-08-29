@@ -322,91 +322,70 @@ function getRolePresets() {
 }
 
 // ---------------------------------------------------------------------------
-// TailView — lightweight read-only agent output (plain <pre>, NO xterm).
+// TailView — agent output viewer (plain <pre>, NO xterm, NO auto-stream).
 //
-// Connects to the same terminal WebSocket; in herdr mode the backend serves a
-// 1.5s poll of `herdr agent read` (plain text), in legacy mode the raw PTY
-// stream. Renders text with ANSI stripped into a <pre> and caps the buffer —
-// this replaces the xterm rendering that froze the sidebar on long sessions.
-// Input happens in herdr / via the detail view's send box (REST), not here.
+// opencode / claude 在 herdr 里是全屏 TUI，原始 `agent read` 渲染行含大量
+// 光标/控制字符（直接流式显示 = 乱码）。这里改为：
+//   • REST 读取快照（/agents/{id}/read），默认不自动刷新；
+//   • 全面过滤 ANSI/OSC/C0 控制字符，只留可读文本；
+//   • 手动「刷新」按钮 + 可选「自动刷新」（默认关）。
+// 卡片列表不再输出实时内容（只显示状态徽标），需要看输出时点开详情。
 // ---------------------------------------------------------------------------
-function stripAnsi(text) {
-	// eslint-disable-next-line no-control-regex
-	return String(text ?? "").replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
+function cleanTerminalText(text) {
+	return String(text ?? "")
+		// OSC 序列：ESC ] ... (BEL|ST)
+		.replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+		// CSI 及其它 ESC 序列
+		.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, "")
+		.replace(/\u001b[^A-Za-z]*[A-Za-z]/g, "")
+		// \r → \n
+		.replace(/\r\n/g, "\n")
+		.replace(/\r/g, "\n")
+		// 其余 C0 控制符（保留 \n \t）
+		// eslint-disable-next-line no-control-regex
+		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+		// 行尾空白 & 连续空行压缩
+		.replace(/[ \t]+$/gm, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
 }
 
-function TailView({ agentId, compact }) {
+function TailView({ agentId, refreshTick = 0, autoRefresh = false }) {
 	const preRef = useRef(null);
-	const bufferRef = useRef("");
-	const [connected, setConnected] = useState(false);
+	const [loading, setLoading] = useState(false);
+
+	const load = useCallback(async () => {
+		setLoading(true);
+		try {
+			const value = await apiGet(`/agents/${encodeURIComponent(agentId)}/read?bytes=20000`);
+			const out = cleanTerminalText(value?.output ?? "");
+			if (preRef.current !== null) {
+				preRef.current.textContent = out === "" ? "（暂无输出）" : out;
+				preRef.current.scrollTop = preRef.current.scrollHeight;
+			}
+		} catch {
+			if (preRef.current !== null) preRef.current.textContent = "（读取失败）";
+		} finally {
+			setLoading(false);
+		}
+	}, [agentId]);
 
 	useEffect(() => {
-		bufferRef.current = "";
-		const pre = preRef.current;
-		const MAX = compact === true ? 48 * 1024 : 256 * 1024;
-		let closed = false;
-		let ws = null;
-		let retry = 0;
-		let reconnectTimer = null;
-		let raf = 0;
-		const render = () => {
-			if (pre !== null) pre.textContent = bufferRef.current;
-			if (pre !== null) pre.scrollTop = pre.scrollHeight;
-		};
-		const scheduleRender = () => {
-			if (raf !== 0) return;
-			raf = requestAnimationFrame(() => {
-				raf = 0;
-				render();
-			});
-		};
-		const append = (text) => {
-			let next = bufferRef.current + text;
-			if (next.length > MAX) next = next.slice(-MAX);
-			bufferRef.current = next;
-			scheduleRender();
-		};
-		const connect = () => {
-			if (closed) return;
-			ws = new WebSocket(wsUrl(`/agent-commander/ws/terminal?id=${encodeURIComponent(agentId)}`));
-			ws.onopen = () => {
-				retry = 0;
-				setConnected(true);
-			};
-			ws.onmessage = (e) => {
-				const write = (text) => append(stripAnsi(text));
-				if (typeof e.data === "string") write(e.data);
-				else e.data.text().then(write).catch(() => {});
-			};
-			ws.onclose = () => {
-				setConnected(false);
-				if (closed) return;
-				retry = Math.min(retry + 1, 6);
-				reconnectTimer = setTimeout(connect, 500 * 2 ** retry);
-			};
-			ws.onerror = () => {
-				try {
-					ws.close();
-				} catch {}
-			};
-		};
-		connect();
-		return () => {
-			closed = true;
-			if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-			if (raf !== 0) cancelAnimationFrame(raf);
-			try {
-				ws?.close();
-			} catch {}
-		};
-	}, [agentId, compact]);
+		load();
+	}, [load, refreshTick]);
 
-	return h("div", { className: compact === true ? "dhac_tailWrap dhac_tailWrapCompact" : "dhac_tailWrap" }, [
+	useEffect(() => {
+		if (autoRefresh !== true) return;
+		const timer = setInterval(load, 2500);
+		return () => clearInterval(timer);
+	}, [autoRefresh, load]);
+
+	return h("div", { className: "dhac_tailWrap" }, [
 		h("div", { className: "dhac_terminalBanner" }, [
-			h("span", { className: `dhac_termDot${connected ? " dhac_termDotOn" : ""}` }),
-			h("span", null, connected ? "实时输出" : "连接中…"),
+			h("span", { className: `dhac_termDot${loading ? " dhac_termDotOn" : ""}` }),
+			h("span", null, loading ? "读取中…" : "输出（已过滤控制字符）"),
 			h("span", { style: { flex: "1" } }),
-			compact !== true && h("span", { className: "dhac_terminalHint" }, "输入请用下方发送框（在 herdr 中执行）")
+			h("span", { className: "dhac_terminalHint" }, "输入请用下方发送框（在 herdr 中执行）")
 		]),
 		h("pre", { ref: preRef, className: "dhac_tail" })
 	]);
@@ -548,14 +527,9 @@ function NewAgentDialog({ sessionId, sessionName, workspaceId, defaultCwd, onClo
 }
 
 // ---------------------------------------------------------------------------
-// Mini live tail card (compact read-only TailView on each agent card)
+// Agent cards — 只显示状态徽标与元信息，不输出实时内容（全屏 TUI 的原始
+// 渲染流是乱码且会触发 herdr 滚动 agent 界面；要看输出请点开详情页）。
 // ---------------------------------------------------------------------------
-function MiniTerminal({ agentId }) {
-	return h(TailView, { agentId, compact: true });
-}
-
-// ---------------------------------------------------------------------------
-// Agent cards (live mini-terminal per agent)
 // ---------------------------------------------------------------------------
 function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
 	if (agents.length === 0) {
@@ -646,9 +620,9 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 					h(Icon, { name: "x", size: 11, className: "dhac_inlineIcon" }),
 					" 删除记录"
 				])
-				: (agent.exited
+				: agent.exited
 					? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
-					: h(MiniTerminal, { agentId: agent.id }))
+					: h("div", { className: "dhac_cardHint" }, "点击查看输出")
 		]);
 	}));
 }
@@ -656,6 +630,8 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
 	const [draft, setDraft] = useState("");
 	const [sending, setSending] = useState(false);
+	const [autoRefresh, setAutoRefresh] = useState(false);
+	const [refreshTick, setRefreshTick] = useState(0);
 	const ghost = agent.running === false;
 	const sendText = async () => {
 		const text = draft.trim();
@@ -680,7 +656,9 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, h(Icon, { name: "minimize", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "rotate-ccw", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: signalInt }, h(Icon, { name: "stop", size: 13 })),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 }))
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "刷新输出", onClick: () => setRefreshTick((t) => t + 1) }, h(Icon, { name: "refresh-cw", size: 13 })),
+			!ghost && h("button", { type: "button", className: `dhac_iconButton dhac_toggleRefresh${autoRefresh ? " dhac_toggleRefreshOn" : ""}`, title: autoRefresh ? "自动刷新：开（每 2.5s）— 点击关闭" : "自动刷新：关 — 点击开启", onClick: () => setAutoRefresh((v) => !v) }, h(Icon, { name: "clock", size: 13 }))
 		]),
 		ghost
 			? h("div", { className: "dhac_terminalDead" }, [
@@ -696,7 +674,7 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			: (agent.exited
 				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
 				: h("div", { className: "dhac_termBody" }, [
-					h(TailView, { agentId: agent.id }),
+					h(TailView, { agentId: agent.id, refreshTick, autoRefresh }),
 					h("div", { className: "dhac_sendBox" }, [
 						h("input", {
 							className: "dhac_input",

@@ -209,8 +209,14 @@ export class HerdrAdapter {
 			{ timeoutMs: timeoutMs + 5000 }
 		);
 	}
-	async agentRead(name, lines = 120) {
-		return this.call(["agent", "read", name, "--source", "recent-unwrapped", "--lines", String(lines), "--format", "text"]);
+	/**
+	 * Read an agent's terminal output. Defaults to `visible` — a PASSIVE read
+	 * that never moves the agent's viewport. `recent-unwrapped` with a large
+	 * --lines makes herdr scroll the agent's alternate screen to collect pages
+	 * (visibly "refreshing" the agent UI), so it is only used on demand.
+	 */
+	async agentRead(name, lines = 60, source = "visible") {
+		return this.call(["agent", "read", name, "--source", source, "--lines", String(lines), "--format", "text"]);
 	}
 	async agentPrompt(name, text, { wait = false, until = null, timeoutMs = 120000 } = {}) {
 		const args = ["agent", "prompt", name, String(text)];

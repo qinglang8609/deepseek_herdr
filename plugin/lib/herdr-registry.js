@@ -210,12 +210,14 @@ export class HerdrAgentRegistry {
 	async read(id, bytes) {
 		const handle = this.requireHandle(id);
 		const limit = Number.isFinite(bytes) && bytes > 0 ? bytes : 12000;
-		const lines = Math.max(10, Math.min(400, Math.ceil(limit / 120)));
+		// 使用 visible 源（被动读取，不滚动 agent 全屏 TUI）；行数限制在可见
+		// 屏幕范围内，避免触发 herdr 的多页滚动收集（会让 agent 界面“刷新”）。
+		const lines = Math.max(10, Math.min(120, Math.ceil(limit / 160)));
 		let text = "";
 		try {
-			text = await this.adapter.agentRead(handle.herdrName, lines);
+			text = await this.adapter.agentRead(handle.herdrName, lines, "visible");
 		} catch (error) {
-			if (error instanceof HerdrError && (error.code === "HERDR_AGENT_NOT_IDLE" || error.code === HERDR_ERRORS.AGENT_NOT_FOUND)) {
+			if (error instanceof HerdrError && (error.code === HERDR_ERRORS.AGENT_NOT_IDLE || error.code === HERDR_ERRORS.AGENT_NOT_FOUND)) {
 				text = await this.adapter.paneRead(handle.paneId, 50);
 			} else {
 				throw error;

@@ -2542,22 +2542,21 @@ function registerWebsockets(ctx, registry, fence, cfg = {}) {
 	const { WebSocketServer } = getWs();
 	const terminalWss = new WebSocketServer({ noServer: true });
 	const listWss = new WebSocketServer({ noServer: true });
-	ctx.effect(() => ctx.webServer.registerUpgrade({
-		path: WS_TERMINAL,
-		handler: (req, socket, head) => {
-			if (!fence(req)) {
-				socket.destroy();
-				return;
-			}
-			terminalWss.handleUpgrade(req, socket, head, (ws) => {
-				if (cfg.herdrMode === true) {
-					attachHerdrTerminal(registry, ws, req);
-				} else {
-					attachTerminal(registry, ws, req, cfg);
+	// 终端 WS 仅在 legacy（node-pty）模式注册。herdr 模式下客户端走 REST
+	// 读取（/agents/{id}/read，visible 源），不再有 WS 轮询 —— 之前的 1.5s
+	// `agent read` 大行数轮询会让 herdr 滚动 agent 的全屏 TUI（界面一直刷新）。
+	if (cfg.herdrMode !== true) {
+		ctx.effect(() => ctx.webServer.registerUpgrade({
+			path: WS_TERMINAL,
+			handler: (req, socket, head) => {
+				if (!fence(req)) {
+					socket.destroy();
+					return;
 				}
-			});
-		}
-	}), "dsh-agent-commander: terminal WebSocket");
+				terminalWss.handleUpgrade(req, socket, head, (ws) => attachTerminal(registry, ws, req, cfg));
+			}
+		}), "dsh-agent-commander: terminal WebSocket");
+	}
 	ctx.effect(() => ctx.webServer.registerUpgrade({
 		path: WS_LIST,
 		handler: (req, socket, head) => {
@@ -2572,59 +2571,6 @@ function registerWebsockets(ctx, registry, fence, cfg = {}) {
 		terminalWss.close();
 		listWss.close();
 	}, "dsh-agent-commander: websocket teardown");
-}
-
-/**
- * herdr-mode terminal attachment: read-only tail. The sidebar keeps showing
- * agent output, but there is no xterm/PTY stream — a 1.5s poll of
- * `registry.read` (herdr agent read) replaces the legacy WebSocket PTY pipe,
- * which is the source of the long-session rendering freeze. Only `close`
- * frames are honored; input/resize are ignored (typing happens in herdr).
- */
-function attachHerdrTerminal(registry, ws, req) {
-	try {
-		const url = new URL(req.url ?? "/", "http://dsh.internal");
-		const id = url.searchParams.get("id");
-		const handle = registry.get(id ?? "");
-		if (handle === void 0) {
-			ws.close(1011, "agent not found");
-			return;
-		}
-		const { WebSocket } = getWs();
-		let last = "";
-		let timer = null;
-		const poll = async () => {
-			if (ws.readyState !== WebSocket.OPEN) return;
-			try {
-				const result = await registry.read(handle.id, 20000);
-				if (result.output !== last) {
-					last = result.output;
-					if (ws.readyState === WebSocket.OPEN) ws.send(result.output);
-				}
-			} catch {}
-		};
-		poll();
-		timer = setInterval(poll, 1500);
-		ws.on("message", (data) => {
-			let control = null;
-			try {
-				const parsed = JSON.parse(data.toString("utf8"));
-				if (parsed !== null && typeof parsed === "object") control = parsed;
-			} catch {}
-			if (control === null || typeof control.type !== "string") return;
-			if (control.type === "close") {
-				registry.close(handle.id, control.graceful === true).catch(() => {});
-			}
-		});
-		ws.on("close", () => {
-			if (timer !== null) clearInterval(timer);
-		});
-		ws.on("error", () => {
-			if (timer !== null) clearInterval(timer);
-		});
-	} catch (error) {
-		ws.close(1011, error instanceof Error ? error.message : String(error));
-	}
 }
 
 function attachList(registry, ws, req) {
