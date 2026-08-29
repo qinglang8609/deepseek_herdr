@@ -12,7 +12,7 @@
 // Docs: https://herdr.dev/docs/  |  agent SKILL: herdrdev/herdr skills/herdr/SKILL.md
 // ============================================================================
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -53,7 +53,7 @@ export function classifyError(text, args = []) {
 	if (t.includes("agent_prompt_stalled") || t.includes("stalled")) return HERDR_ERRORS.AGENT_PROMPT_STALLED;
 	if (t.includes("agent_not_idle") || t.includes("not idle")) return HERDR_ERRORS.AGENT_NOT_IDLE;
 	if (t.includes("no such agent") || t.includes("agent not found") || t.includes("unknown agent")) return HERDR_ERRORS.AGENT_NOT_FOUND;
-	if (t.includes("server down") || t.includes("connection refused") || t.includes("unreachable")) return HERDR_ERRORS.SERVER_DOWN;
+	if (t.includes("server_not_running") || t.includes("no herdr server is running") || t.includes("server down") || t.includes("connection refused") || t.includes("unreachable")) return HERDR_ERRORS.SERVER_DOWN;
 	return HERDR_ERRORS.UNKNOWN;
 }
 
@@ -136,9 +136,31 @@ export class HerdrAdapter {
 
 	/**
 	 * Execute a command and return its `.result` payload.
-	 * Classifies JSON error envelopes and non-zero exits.
+	 * Classifies JSON error envelopes and non-zero exits. When the server is
+	 * not running, auto-starts it (detached) and retries ONCE — the plugin
+	 * owns the herdr daemon lifecycle, so a dead server self-heals instead of
+	 * failing every operation.
 	 */
 	async call(args, { timeoutMs = 30000 } = {}) {
+		try {
+			return await this._callOnce(args, { timeoutMs });
+		} catch (error) {
+			if (error instanceof HerdrError && error.code === HERDR_ERRORS.SERVER_DOWN && this._healing !== true) {
+				this._healing = true;
+				try {
+					if (await this.ensureServer()) {
+						return await this._callOnce(args, { timeoutMs });
+					}
+				} finally {
+					this._healing = false;
+				}
+			}
+			throw error;
+		}
+	}
+
+	/** Single attempt without the server self-heal wrapper. */
+	async _callOnce(args, { timeoutMs = 30000 } = {}) {
 		const { stdout, stderr, code } = await this.callRaw(args, { timeoutMs });
 		let parsed = null;
 		try {
@@ -157,6 +179,49 @@ export class HerdrAdapter {
 		}
 		// Plain-text fallback (e.g. --version, status).
 		return stdout;
+	}
+
+	/**
+	 * Ensure the herdr server is running. Starts it as a DETACHED background
+	 * process (`herdr server`) when `status` reports it is down, then polls
+	 * until it answers. Never throws; returns boolean.
+	 */
+	ensureServer() {
+		if (this.binary === null) return Promise.resolve(false);
+		return HerdrAdapter.probe(this.binary).then((probe) => {
+			if (probe.available) return true;
+			let child = null;
+			try {
+				child = spawn(this.binary, ["server"], {
+					detached: true,
+					stdio: "ignore",
+					env: { ...process.env, NO_COLOR: "1" }
+				});
+				child.unref();
+			} catch {
+				return false;
+			}
+			// Poll up to ~15s for the socket to come up.
+			let attempts = 0;
+			const wait = (resolve) => {
+				attempts += 1;
+				HerdrAdapter.probe(this.binary).then((p) => {
+					if (p.available) {
+						resolve(true);
+						return;
+					}
+					if (attempts >= 15) {
+						resolve(false);
+						return;
+					}
+					setTimeout(() => wait(resolve), 1000);
+				}).catch(() => {
+					if (attempts >= 15) resolve(false);
+					else setTimeout(() => wait(resolve), 1000);
+				});
+			};
+			return new Promise((resolve) => wait(resolve));
+		});
 	}
 
 	// ---- workspace ----
@@ -244,6 +309,9 @@ export class HerdrAdapter {
 	async selftest() {
 		if (this.binary === null) return { ok: false, reason: HERDR_ERRORS.NOT_FOUND };
 		try {
+			// 插件启动即确保 herdr server 在线（自愈：挂了自动拉起）。
+			const started = await this.ensureServer();
+			if (!started) return { ok: false, reason: HERDR_ERRORS.SERVER_DOWN };
 			await this.call(["workspace", "list"]);
 			await this.call(["agent", "list"]);
 			const probe = await HerdrAdapter.probe(this.binary);
