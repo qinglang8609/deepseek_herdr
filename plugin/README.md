@@ -139,6 +139,7 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 | `rolePresets` | string[] | 6 个内置预设 | 「新建智能体」弹窗的角色预设 |
 | `baseCwd` | string | "" | 无会话工作目录时的默认项目根（空=进程 cwd） |
 | `memoryDir` | string | ".deepseek" | 共享记忆目录名（memory.md / task-board.md / agents.json / memory.db 等） |
+| `agentHost` | "auto" \| "herdr" \| "legacy" | "auto" | 智能体宿主：auto 检测到 herdr 二进制即用 herdr；herdr 强制 herdr；legacy 回退 node-pty（详见 `docs/herdr-integration-dev.md`） |
 
 运行时配置快照还通过 `GET /agent-commander/api/config` 暴露给客户端（角色预设、
 引擎列表、限额），客户端「新建智能体」弹窗会优先使用服务端配置的 `rolePresets`。
