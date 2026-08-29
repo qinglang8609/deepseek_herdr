@@ -13,7 +13,8 @@ import { HerdrAdapter } from "../lib/herdr-adapter.js";
 import { HerdrAgentRegistry } from "../lib/herdr-registry.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const CWD = "/tmp/herdr-e2e";
+// 测试专用目录：若在 herdr 里看到名为 dsh-e2e-test 的空间，是测试创建且会自动清理。
+const CWD = "/tmp/dsh-e2e-test";
 import { mkdirSync, rmSync } from "node:fs";
 mkdirSync(CWD, { recursive: true });
 
