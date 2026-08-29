@@ -14,7 +14,7 @@ import { HerdrAgentRegistry } from "../lib/herdr-registry.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CWD = "/tmp/herdr-e2e";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 mkdirSync(CWD, { recursive: true });
 
 const adapter = new HerdrAdapter();
@@ -74,4 +74,7 @@ await reg.close(handle.id, true);
 console.log("[list after]", JSON.stringify(reg.list().map((m) => `${m.id}:${m.status}`)));
 
 reg.shutdown();
+try {
+	rmSync(CWD, { recursive: true, force: true });
+} catch {}
 console.log("E2E DONE ✅");

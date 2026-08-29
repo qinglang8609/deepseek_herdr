@@ -166,6 +166,9 @@ export class HerdrAdapter {
 	async workspaceCreate(cwd, label) {
 		return this.call(["workspace", "create", "--cwd", cwd, "--label", label]);
 	}
+	async workspaceClose(workspaceId) {
+		return this.call(["workspace", "close", workspaceId]);
+	}
 
 	// ---- pane ----
 	async paneList(workspaceId = null) {

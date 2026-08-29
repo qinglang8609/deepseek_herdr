@@ -30,6 +30,11 @@ export const HERDR_KIND_MAP = {
 };
 
 const POLL_MS = 2000;
+// 退出判定宽限：agent 需先被 herdr 列表见过，且消失超过该时长才标 exited
+// （覆盖 agentStart 启动期 30-60s 内尚未进入列表的窗口）。
+const EXIT_GRACE_MS = 30000;
+// 外部（非本插件创建）智能体退出后，缓存保留多久再清理，防幽灵记录累积。
+const EXTERNAL_PRUNE_MS = 5 * 60 * 1000;
 
 function slugHerdrName(id) {
 	// herdr agent names must match [a-z][a-z0-9_-]{0,31}.
@@ -101,6 +106,7 @@ export class HerdrAgentRegistry {
 			workspaceId: handle.workspaceId,
 			restored: handle.restored === true,
 			briefing: handle.briefing ?? "none",
+			external: handle.external === true,
 			createdAt: handle.createdAt,
 			updatedAt: handle.updatedAt
 		};
@@ -138,7 +144,7 @@ export class HerdrAgentRegistry {
 				this.onSpawn(targetCwd);
 			} catch {}
 		}
-		const { workspaceId, rootPaneId } = await this.ensureWorkspace(targetCwd);
+		const { workspaceId, rootPaneId, created: wsCreated } = await this.ensureWorkspace(targetCwd);
 		let paneId = await this.findFreePane(workspaceId, targetCwd);
 		if (paneId === null) {
 			// 窗口排版：复用已释放的空面板；否则从根面板 split。方向按当前
@@ -173,7 +179,8 @@ export class HerdrAgentRegistry {
 			briefing: trimmedRole !== "" || skillList.length > 0 ? "pending" : "none",
 			status: "unknown",
 			exited: false,
-			exitCode: null
+			exitCode: null,
+			_wsCreated: wsCreated === true
 		};
 		this.agents.set(agentId, handle);
 		this.notify();
@@ -265,19 +272,28 @@ export class HerdrAgentRegistry {
 
 	async close(id, graceful) {
 		const handle = this.requireHandle(id);
+		const { paneId, cwd, _wsCreated } = handle;
 		if (graceful !== false && !handle.exited) {
 			try {
 				await this.adapter.agentPrompt(handle.herdrName, "/exit", { wait: true, timeoutMs: 15000 });
 			} catch {}
 		}
-		try {
-			await this.adapter.paneClose(handle.paneId);
-		} catch {}
+		if (!handle.exited) {
+			try {
+				await this.adapter.paneClose(paneId);
+			} catch {}
+		}
 		handle.exited = true;
 		handle.status = "exited";
 		handle.exitCode = 0;
 		this.agents.delete(id);
-		this._workspaceCache.delete(handle.cwd);
+		this._workspaceCache.delete(cwd);
+		// 若该 workspace 是插件为这个 cwd 新建的、且已无其它智能体引用 → 关闭空空间。
+		if (_wsCreated === true && ![...this.agents.values()].some((h) => h.workspaceId === handle.workspaceId)) {
+			try {
+				await this.adapter.workspaceClose(handle.workspaceId);
+			} catch {}
+		}
 		this.notify();
 	}
 
@@ -340,9 +356,40 @@ export class HerdrAgentRegistry {
 				const paneId = e.pane_id ?? e.pane ?? null;
 				const herdrName = e.name ?? e.id ?? paneId;
 				if (herdrName === null) continue;
-				const handle = [...this.agents.values()].find((h) => h.herdrName === herdrName || h.paneId === paneId);
-				if (handle === void 0) continue; // 非本插件创建的 agent 暂不接管
+				let handle = [...this.agents.values()].find((h) => h.herdrName === herdrName || (paneId !== null && h.paneId === paneId));
+				if (handle === void 0) {
+					// 接管 herdr 空间中已存在的智能体（手动启动/其它来源）：
+					// 雷达监控整个 herdr 空间，而非仅本插件创建的 agent。
+					const status = mapStatus(e.agent_status ?? e.status);
+					handle = {
+						id: herdrName,
+						herdrName,
+						paneId: paneId ?? "",
+						workspaceId: e.workspace_id ?? "",
+						type: e.agent ?? e.kind ?? "agent",
+						name: e.terminal_title_stripped ?? e.name ?? herdrName,
+						role: "",
+						skills: [],
+						cwd: typeof e.cwd === "string" && e.cwd !== "" ? e.cwd : this.baseCwd,
+						sessionId: "",
+						sessionName: "",
+						restored: false,
+						pid: null,
+						createdAt: Date.now(),
+						updatedAt: Date.now(),
+						lastOutputAt: Date.now(),
+						briefing: "none",
+						status,
+						exited: false,
+						exitCode: null,
+						external: true,
+						_seenAt: Date.now()
+					};
+					this.agents.set(handle.id, handle);
+					this.notify();
+				}
 				seen.add(handle.id);
+				if (handle._seenAt === void 0) handle._seenAt = Date.now();
 				const status = mapStatus(e.agent_status ?? e.status);
 				if (handle.status !== status) {
 					handle.status = status;
@@ -351,13 +398,22 @@ export class HerdrAgentRegistry {
 				}
 				if (typeof e.cwd === "string" && e.cwd !== "" && handle.cwd !== e.cwd) handle.cwd = e.cwd;
 				if (typeof e.pane_id === "string" && e.pane_id !== "") handle.paneId = e.pane_id;
+				if (typeof e.workspace_id === "string" && e.workspace_id !== "") handle.workspaceId = e.workspace_id;
 			}
+			const now = Date.now();
 			for (const [id, handle] of this.agents) {
 				if (seen.has(id)) continue;
+				// 退出判定要求先见过一次（避免启动期/恢复期误标 exited）。
+				if (handle._seenAt === void 0 || now - handle._seenAt < EXIT_GRACE_MS) continue;
 				if (!handle.exited) {
 					handle.exited = true;
 					handle.status = "exited";
-					handle.updatedAt = Date.now();
+					handle.updatedAt = now;
+					this.notify();
+				}
+				// 外部智能体退出一段时间后从缓存移除（防幽灵累积）。
+				if (handle.external === true && now - handle.updatedAt > EXTERNAL_PRUNE_MS) {
+					this.agents.delete(id);
 					this.notify();
 				}
 			}
@@ -385,13 +441,13 @@ export class HerdrAgentRegistry {
 			const panes = await this.adapter.paneList(ws.workspace_id);
 			const hit = (panes?.panes ?? []).find((p) => p.cwd === cwd);
 			if (hit !== void 0) {
-				const entry = { workspaceId: ws.workspace_id, rootPaneId: hit.pane_id };
+				const entry = { workspaceId: ws.workspace_id, rootPaneId: hit.pane_id, created: false };
 				this._workspaceCache.set(cwd, entry);
 				return entry;
 			}
 		}
 		const created = await this.adapter.workspaceCreate(cwd, basename(cwd));
-		const entry = { workspaceId: created?.workspace?.workspace_id, rootPaneId: created?.root_pane?.pane_id };
+		const entry = { workspaceId: created?.workspace?.workspace_id, rootPaneId: created?.root_pane?.pane_id, created: true };
 		if (entry.workspaceId === void 0) throw new Error("herdr workspace create 失败");
 		this._workspaceCache.set(cwd, entry);
 		return entry;

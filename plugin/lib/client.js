@@ -660,7 +660,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 				agent.briefing === "pending" ? "简报注入中（等待启动就绪后自动回车执行）…" : "简报未能确认执行，请打开终端检查"
 			]),
 			h("div", { className: "dhac_agentMeta", title: `${agent.cwd} · 会话 ${agent.sessionName ?? agent.sessionId ?? "-"}` },
-				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.restored ? " · 已恢复" : ""}`),
+				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.external ? " · herdr" : ""}${agent.restored ? " · 已恢复" : ""}`),
 			ghost
 				? h("div", { className: "dhac_cardExited" }, [
 					"未运行（恢复失败或已关闭）— ",
