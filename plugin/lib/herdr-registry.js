@@ -36,6 +36,18 @@ const EXIT_GRACE_MS = 30000;
 // 外部（非本插件创建）智能体退出后，缓存保留多久再清理，防幽灵记录累积。
 const EXTERNAL_PRUNE_MS = 5 * 60 * 1000;
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 启动/运行期确认弹窗自动应答（与 legacy monitor 同一套识别规则）：
+//   • 菜单类（claude 文件夹信任等，默认项即安全项）→ 直接回车
+//   • 通用 y/n → 发 y + 回车
+// 匹配在去空白后的可见输出上做。
+const AUTO_ANSWER_PATTERNS = [
+	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck|Doyoutrustthefilesinthisfolder/i, y: false },
+	{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/i, y: true },
+	{ re: /PressEnterto|Entertoselect|Selectanoption/i, y: false }
+];
+
 function slugHerdrName(id) {
 	// herdr agent names must match [a-z][a-z0-9_-]{0,31}.
 	return ("a" + String(id ?? "").toLowerCase().replace(/[^a-z0-9_-]/g, "")).slice(0, 31) || "a" + randomUUID().slice(0, 8);
@@ -189,8 +201,13 @@ export class HerdrAgentRegistry {
 			handle.status = mapStatus(started?.agent?.agent_status);
 		} catch (error) {
 			if (error instanceof HerdrError && error.code === HERDR_ERRORS.AGENT_NOT_READY) {
-				// 启动期即 blocked（如首启确认弹窗）：名字保留，等 approve。
+				// 启动期即 blocked（如 claude 的文件夹信任/权限弹窗）：自动应答，
+				// 不再卡在灰色界面等手动确认。
 				handle.status = "blocked";
+				const resolved = await this.autoAnswer(handle, 4);
+				if (resolved) {
+					handle.status = mapStatus((await this.adapter.agentGet(herdrName).catch(() => null))?.agent?.agent_status) || "idle";
+				}
 			} else {
 				this.agents.delete(agentId);
 				this.notify();
@@ -485,12 +502,51 @@ export class HerdrAgentRegistry {
 	}
 
 	/** Inject the briefing as the agent's first task (async; waits for idle). */
+	/**
+	 * 自动应答确认弹窗（claude 文件夹信任 / 通用 y/n 等）。
+	 * 读取 visible 输出，命中已知弹窗模式就发送对应按键（回车 / y+回车），
+	 * 直到 agent 脱离 blocked 或达到尝试上限。返回是否已就绪。
+	 */
+	async autoAnswer(handle, attempts = 4) {
+		for (let i = 0; i < attempts; i++) {
+			let text = "";
+			try {
+				text = await this.adapter.agentRead(handle.herdrName, 15, "visible");
+			} catch {
+				break;
+			}
+			const t = String(text ?? "").replace(/\s+/g, "");
+			const hit = AUTO_ANSWER_PATTERNS.find((p) => p.re.test(t));
+			if (hit === void 0) break;
+			try {
+				if (hit.y === true) {
+					await this.adapter.paneSendText(handle.paneId, "y");
+					await this.adapter.paneSendKeys(handle.paneId, "Enter");
+				} else {
+					await this.adapter.agentSendKeys(handle.herdrName, "enter");
+				}
+			} catch {
+				break;
+			}
+			await sleep(1200);
+			const info = await this.adapter.agentGet(handle.herdrName).catch(() => null);
+			const st = mapStatus(info?.agent?.agent_status);
+			if (st === "idle" || st === "working" || st === "done") return true;
+		}
+		return false;
+	}
+
 	injectBriefing(handle, briefing) {
 		(async () => {
-			for (let attempt = 0; attempt < 2; attempt++) {
+			for (let attempt = 0; attempt < 3; attempt++) {
 				if (handle.exited) return;
 				try {
-					// 先等 agent 就绪（idle/done/blocked 任一），unknown/启动期
+					// 启动期就绪前可能挂着未被 herdr 判为 blocked 的确认弹窗：
+					// 先试探性自动应答一次（无命中则不动作）。
+					if (handle.status === "blocked" || handle.status === "unknown" || handle.status === "idle") {
+						await this.autoAnswer(handle, 2);
+					}
+					// 等 agent 就绪（idle/done/blocked 任一），unknown/启动期
 					// 的 prompt 会被吞或触发 agent_prompt_stalled。
 					await this.adapter.agentWait(handle.herdrName, { until: ["idle", "done", "blocked"], timeoutMs: 120000 });
 					if (handle.exited) return;
@@ -502,7 +558,10 @@ export class HerdrAgentRegistry {
 					if (error instanceof HerdrError && error.code === HERDR_ERRORS.AGENT_BLOCKED) {
 						handle.status = "blocked";
 						this.updated(handle);
-						return; // 等 agent_approve 确认后再补注
+						// 自动点确认（不再卡在灰色界面），成功后重试注入。
+						const resolved = await this.autoAnswer(handle, 4);
+						if (resolved) continue;
+						return; // 仍 blocked：等 agent_approve 手动确认
 					}
 					// 其他错误（stalled/timeout/网络）：重试一次
 				}

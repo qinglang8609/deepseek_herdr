@@ -370,12 +370,15 @@ function TailView({ agentId, refreshTick = 0, autoRefresh = false }) {
 		}
 	}, [agentId]);
 
+	// 不自动读取：打开详情不拉输出（避免乱码 / 触发 herdr 滚动 agent 界面）。
+	// 仅当点「刷新输出」（refreshTick>0）或开启「自动刷新」时才读。
 	useEffect(() => {
-		load();
+		if (refreshTick > 0) load();
 	}, [load, refreshTick]);
 
 	useEffect(() => {
 		if (autoRefresh !== true) return;
+		load();
 		const timer = setInterval(load, 2500);
 		return () => clearInterval(timer);
 	}, [autoRefresh, load]);
@@ -383,9 +386,9 @@ function TailView({ agentId, refreshTick = 0, autoRefresh = false }) {
 	return h("div", { className: "dhac_tailWrap" }, [
 		h("div", { className: "dhac_terminalBanner" }, [
 			h("span", { className: `dhac_termDot${loading ? " dhac_termDotOn" : ""}` }),
-			h("span", null, loading ? "读取中…" : "输出（已过滤控制字符）"),
+			h("span", null, loading ? "读取中…" : "输出（不自动读取）"),
 			h("span", { style: { flex: "1" } }),
-			h("span", { className: "dhac_terminalHint" }, "输入请用下方发送框（在 herdr 中执行）")
+			h("span", { className: "dhac_terminalHint" }, autoRefresh ? "自动刷新中…" : "点「刷新输出」查看；输入用下方发送框")
 		]),
 		h("pre", { ref: preRef, className: "dhac_tail" })
 	]);
