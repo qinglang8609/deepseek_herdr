@@ -17,7 +17,10 @@
 // ============================================================================
 
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { execFile } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
+import { homedir } from "node:os";
 import { HerdrAdapter, HerdrError, HERDR_ERRORS } from "./herdr-adapter.js";
 
 /** DSH engine type → herdr `agent start --kind`. codebuddy 无 herdr kind。 */
@@ -37,6 +40,23 @@ const EXIT_GRACE_MS = 30000;
 const EXTERNAL_PRUNE_MS = 5 * 60 * 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const execFileAsync = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
+	execFile(cmd, args, { timeout: 8000, maxBuffer: 4 * 1024 * 1024, ...opts }, (error, stdout) => {
+		if (error) {
+			reject(error);
+			return;
+		}
+		resolve(String(stdout ?? "").trim());
+	});
+});
+
+// 统计缓存有效期：雷达 2s 轮询时，token/任务统计最多每 30s 重算一次。
+const STATS_CACHE_MS = 30000;
+// claude 成本估算（$/1M tokens，claude-sonnet-4 量级，仅供参考）。
+const CLAUDE_COST_PER_1M = 3;
+const OPENCODE_DB = join(homedir(), ".local", "share", "opencode", "opencode.db");
+const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 
 // 启动/运行期确认弹窗自动应答（与 legacy monitor 同一套识别规则）：
 //   • 菜单类（claude 文件夹信任等，默认项即安全项）→ 直接回车
@@ -120,7 +140,8 @@ export class HerdrAgentRegistry {
 			briefing: handle.briefing ?? "none",
 			external: handle.external === true,
 			createdAt: handle.createdAt,
-			updatedAt: handle.updatedAt
+			updatedAt: handle.updatedAt,
+			stats: handle._stats ?? null
 		};
 	}
 
@@ -392,6 +413,7 @@ export class HerdrAgentRegistry {
 						cwd: typeof e.cwd === "string" && e.cwd !== "" ? e.cwd : this.baseCwd,
 						sessionId: "",
 						sessionName: "",
+						nativeSession: e.agent_session?.value ?? "",
 						restored: false,
 						pid: null,
 						createdAt: Date.now(),
@@ -402,7 +424,9 @@ export class HerdrAgentRegistry {
 						exited: false,
 						exitCode: null,
 						external: true,
-						_seenAt: Date.now()
+						_seenAt: Date.now(),
+						_stats: null,
+						_statsAt: 0
 					};
 					this.agents.set(handle.id, handle);
 					this.notify();
@@ -418,6 +442,7 @@ export class HerdrAgentRegistry {
 				if (typeof e.cwd === "string" && e.cwd !== "" && handle.cwd !== e.cwd) handle.cwd = e.cwd;
 				if (typeof e.pane_id === "string" && e.pane_id !== "") handle.paneId = e.pane_id;
 				if (typeof e.workspace_id === "string" && e.workspace_id !== "") handle.workspaceId = e.workspace_id;
+				if (e.agent_session?.value) handle.nativeSession = e.agent_session.value;
 			}
 			const now = Date.now();
 			for (const [id, handle] of this.agents) {
@@ -436,6 +461,7 @@ export class HerdrAgentRegistry {
 					this.notify();
 				}
 			}
+			this.maybeRefreshStats();
 		} catch (error) {
 			if (error instanceof HerdrError && (error.code === HERDR_ERRORS.SERVER_DOWN || error.code === HERDR_ERRORS.NOT_FOUND)) {
 				for (const handle of this.agents.values()) {
@@ -573,6 +599,125 @@ export class HerdrAgentRegistry {
 
 	shutdown() {
 		clearInterval(this._pollTimer);
+	}
+
+	// -------------------------------------------------- token/任务统计（尽力而为）
+	/**
+	 * 计算智能体的 token 消耗 / 成本 / 任务数 / 当前任务（缓存 30s）。
+	 * 数据源：opencode → opencode.db(SQLite)；claude → ~/.claude/projects/<cwd-slug>/ 最新 jsonl。
+	 * 取不到返回 null（不阻塞、不报错）。
+	 */
+	async statsOf(handle) {
+		if (handle.exited) return null;
+		const now = Date.now();
+		if (handle._statsAt !== void 0 && now - (handle._statsAt ?? 0) < STATS_CACHE_MS) return handle._stats ?? null;
+		let value = null;
+		try {
+			if (handle.type === "opencode") value = await this.opencodeStats(handle);
+			else if (handle.type === "claude") value = await this.claudeStats(handle);
+		} catch {}
+		handle._stats = value;
+		handle._statsAt = Date.now();
+		return value;
+	}
+
+	async opencodeStats(handle) {
+		const sid = handle.nativeSession;
+		if (typeof sid !== "string" || sid === "") return null;
+		if (!existsSync(OPENCODE_DB)) return null;
+		const q = (sql) => execFileAsync("/usr/bin/sqlite3", [OPENCODE_DB, sql], { timeout: 8000 });
+		const esc = sid.replace(/'/g, "''");
+		const row = await q(`SELECT cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, title FROM session WHERE id='${esc}'`);
+		const [cost, tIn, tOut, tReason, tCache, title] = (row ?? "").split("|");
+		if (tIn === void 0) return null;
+		const tasks = Number(await q(`SELECT COUNT(*) FROM message WHERE session_id='${esc}' AND json_extract(data,'$.role')='user'`) || 0);
+		let currentTask = "";
+		try {
+			const last = await q(
+				`SELECT p.data FROM part p JOIN message m ON m.id=p.message_id ` +
+				`WHERE p.session_id='${esc}' AND json_extract(p.data,'$.type')='text' ` +
+				`AND json_extract(m.data,'$.role')='user' ORDER BY p.time_created DESC LIMIT 1`
+			);
+			currentTask = (JSON.parse(last ?? "{}").text ?? "").trim().slice(0, 120);
+		} catch {}
+		return {
+			tokens: (Number(tIn) || 0) + (Number(tOut) || 0) + (Number(tReason) || 0),
+			tokensInput: Number(tIn) || 0,
+			tokensOutput: Number(tOut) || 0,
+			cost: Number(cost) > 0 ? Number(cost) : null,
+			tasks,
+			currentTask,
+			title: typeof title === "string" && title !== "" ? title.slice(0, 60) : null
+		};
+	}
+
+	async claudeStats(handle) {
+		// claude 的 project 目录名 = cwd 中所有非字母数字字符替换为 "-"。
+		const slug = handle.cwd.replace(/[^a-zA-Z0-9]+/g, "-");
+		const dir = join(CLAUDE_PROJECTS_DIR, slug);
+		if (!existsSync(dir)) return null;
+		const files = readdirSync(dir)
+			.filter((f) => f.endsWith(".jsonl"))
+			.map((f) => ({ f, mtimeMs: statSync(join(dir, f)).mtimeMs }))
+			.sort((a, b) => b.mtimeMs - a.mtimeMs);
+		if (files.length === 0) return null;
+		// 取最新会话文件近似当前 agent（claude 的 herdr 集成不总是上报 session id）。
+		const full = join(dir, files[0].f);
+		let inTok = 0;
+		let outTok = 0;
+		let tasks = 0;
+		let currentTask = "";
+		for (const line of readFileSync(full, "utf8").split("\n")) {
+			if (line === "") continue;
+			let d;
+			try {
+				d = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			if (d?.type === "assistant") {
+				const u = d.message?.usage;
+				if (u && typeof u === "object") {
+					inTok += u.input_tokens ?? u.cache_creation_input_tokens ?? 0;
+					outTok += u.output_tokens ?? 0;
+				}
+			} else if (d?.type === "user" && d.message?.tool_use_id === void 0) {
+				const c = d.message?.content;
+				const texts = Array.isArray(c)
+					? c.filter((p) => typeof p === "string" || p?.type === "text")
+						.map((p) => (typeof p === "string" ? p : p.text ?? ""))
+						.join(" ")
+						.trim()
+					: typeof c === "string"
+						? c.trim()
+						: "";
+				if (texts !== "") {
+					tasks += 1;
+					currentTask = texts;
+				}
+			}
+		}
+		return {
+			tokens: inTok + outTok,
+			tokensInput: inTok,
+			tokensOutput: outTok,
+			cost: (inTok + outTok) > 0 ? ((inTok + outTok) / 1e6) * CLAUDE_COST_PER_1M : null,
+			tasks,
+			currentTask: currentTask.slice(0, 120),
+			title: null
+		};
+	}
+
+	/** 雷达轮询时按需刷新统计（30s 缓存，异步不阻塞列表）。 */
+	maybeRefreshStats() {
+		const now = Date.now();
+		for (const handle of this.agents.values()) {
+			if (handle.exited) continue;
+			if (handle._statsAt !== void 0 && now - (handle._statsAt ?? 0) < STATS_CACHE_MS) continue;
+			this.statsOf(handle).then(() => {
+				this.notify();
+			}).catch(() => {});
+		}
 	}
 }
 

@@ -38,7 +38,8 @@ const ICON_PATHS = {
 	"plus": [["path", { d: "M5 12h14" }], ["path", { d: "M12 5v14" }]],
 	"stop": [["rect", { x: 3, y: 3, width: 18, height: 18, rx: 2, fill: "currentColor", stroke: "none" }]],
 	"bot": [["path", { d: "M12 8V4H8" }], ["rect", { width: 16, height: 12, x: 4, y: 8, rx: 2 }], ["path", { d: "M2 14h2" }], ["path", { d: "M20 14h2" }], ["path", { d: "M15 13v2" }], ["path", { d: "M9 13v2" }]],
-	"layout": [["rect", { width: 7, height: 7, x: 3, y: 3, rx: 1 }], ["rect", { width: 7, height: 7, x: 14, y: 3, rx: 1 }], ["rect", { width: 7, height: 7, x: 14, y: 14, rx: 1 }], ["rect", { width: 7, height: 7, x: 3, y: 14, rx: 1 }]]
+	"layout": [["rect", { width: 7, height: 7, x: 3, y: 3, rx: 1 }], ["rect", { width: 7, height: 7, x: 14, y: 3, rx: 1 }], ["rect", { width: 7, height: 7, x: 14, y: 14, rx: 1 }], ["rect", { width: 7, height: 7, x: 3, y: 14, rx: 1 }]],
+	"stopwatch": [["circle", { cx: 12, cy: 13, r: 8 }], ["path", { d: "M12 9v4l2 2" }], ["path", { d: "M9 2h6" }], ["path", { d: "M12 2v3" }]]
 };
 
 function Icon({ name, size = 14, className = "" }) {
@@ -322,76 +323,32 @@ function getRolePresets() {
 }
 
 // ---------------------------------------------------------------------------
-// TailView — agent output viewer (plain <pre>, NO xterm, NO auto-stream).
-//
-// opencode / claude 在 herdr 里是全屏 TUI，原始 `agent read` 渲染行含大量
-// 光标/控制字符（直接流式显示 = 乱码）。这里改为：
-//   • REST 读取快照（/agents/{id}/read），默认不自动刷新；
-//   • 全面过滤 ANSI/OSC/C0 控制字符，只留可读文本；
-//   • 手动「刷新」按钮 + 可选「自动刷新」（默认关）。
-// 卡片列表不再输出实时内容（只显示状态徽标），需要看输出时点开详情。
+// 卡片时间/统计工具
 // ---------------------------------------------------------------------------
-function cleanTerminalText(text) {
-	return String(text ?? "")
-		// OSC 序列：ESC ] ... (BEL|ST)
-		.replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
-		// CSI 及其它 ESC 序列
-		.replace(/\u001b\[[0-9;?]*[ -\/]*[@-~]/g, "")
-		.replace(/\u001b[^A-Za-z]*[A-Za-z]/g, "")
-		// \r → \n
-		.replace(/\r\n/g, "\n")
-		.replace(/\r/g, "\n")
-		// 其余 C0 控制符（保留 \n \t）
-		// eslint-disable-next-line no-control-regex
-		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
-		// 行尾空白 & 连续空行压缩
-		.replace(/[ \t]+$/gm, "")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
+function fmtTime(ts) {
+	if (!Number.isFinite(ts)) return "-";
+	const d = new Date(ts);
+	const now = new Date();
+	const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+	return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}-${d.getDate()} ${hm}`;
 }
-
-function TailView({ agentId, refreshTick = 0, autoRefresh = false }) {
-	const preRef = useRef(null);
-	const [loading, setLoading] = useState(false);
-
-	const load = useCallback(async () => {
-		setLoading(true);
-		try {
-			const value = await apiGet(`/agents/${encodeURIComponent(agentId)}/read?bytes=20000`);
-			const out = cleanTerminalText(value?.output ?? "");
-			if (preRef.current !== null) {
-				preRef.current.textContent = out === "" ? "（暂无输出）" : out;
-				preRef.current.scrollTop = preRef.current.scrollHeight;
-			}
-		} catch {
-			if (preRef.current !== null) preRef.current.textContent = "（读取失败）";
-		} finally {
-			setLoading(false);
-		}
-	}, [agentId]);
-
-	// 不自动读取：打开详情不拉输出（避免乱码 / 触发 herdr 滚动 agent 界面）。
-	// 仅当点「刷新输出」（refreshTick>0）或开启「自动刷新」时才读。
-	useEffect(() => {
-		if (refreshTick > 0) load();
-	}, [load, refreshTick]);
-
-	useEffect(() => {
-		if (autoRefresh !== true) return;
-		load();
-		const timer = setInterval(load, 2500);
-		return () => clearInterval(timer);
-	}, [autoRefresh, load]);
-
-	return h("div", { className: "dhac_tailWrap" }, [
-		h("div", { className: "dhac_terminalBanner" }, [
-			h("span", { className: `dhac_termDot${loading ? " dhac_termDotOn" : ""}` }),
-			h("span", null, loading ? "读取中…" : "输出（不自动读取）"),
-			h("span", { style: { flex: "1" } }),
-			h("span", { className: "dhac_terminalHint" }, autoRefresh ? "自动刷新中…" : "点「刷新输出」查看；输入用下方发送框")
-		]),
-		h("pre", { ref: preRef, className: "dhac_tail" })
-	]);
+function fmtUptime(ts) {
+	if (!Number.isFinite(ts)) return "-";
+	let s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+	if (s < 60) return `${s}秒`;
+	const m = Math.floor(s / 60);
+	s %= 60;
+	if (m < 60) return `${m}分${s}秒`;
+	const h = Math.floor(m / 60);
+	const mm = m % 60;
+	if (h < 24) return `${h}小时${String(mm).padStart(2, "0")}分`;
+	return `${Math.floor(h / 24)}天${h % 24}小时`;
+}
+function fmtTokens(n) {
+	if (!Number.isFinite(n) || n <= 0) return "0";
+	if (n < 1000) return String(n);
+	if (n < 1e6) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1e6).toFixed(2)}M`;
 }
 
 // ---------------------------------------------------------------------------
@@ -615,6 +572,23 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 			]),
 			h("div", { className: "dhac_agentMeta", title: `${agent.cwd} · 会话 ${agent.sessionName ?? agent.sessionId ?? "-"}` },
 				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.external ? " · herdr" : ""}${agent.restored ? " · 已恢复" : ""}`),
+			!ghost && !agent.exited && h("div", { className: "dhac_cardInfo" }, [
+				h("span", { className: "dhac_statusText", "data-status": agent.status }, STATUS_LABEL[agent.status] ?? agent.status),
+				h("span", { className: "dhac_infoItem", title: "开启时间" }, [
+					h(Icon, { name: "clock", size: 11, className: "dhac_inlineIcon" }),
+					`开启 ${fmtTime(agent.createdAt)}`
+				]),
+				h("span", { className: "dhac_infoItem", title: "运行时间" }, [
+					h(Icon, { name: "stopwatch", size: 11, className: "dhac_inlineIcon" }),
+					`运行 ${fmtUptime(agent.createdAt)}`
+				])
+			]),
+			!ghost && !agent.exited && agent.stats !== null && h("div", { className: "dhac_cardStats" }, [
+				h("span", { className: "dhac_statItem", title: "Token 消耗" }, `⚡ ${fmtTokens(agent.stats.tokens ?? 0)}`),
+				(agent.stats.cost !== null && agent.stats.cost !== void 0) && h("span", { className: "dhac_statItem", title: "成本（估算）" }, `$${(agent.stats.cost ?? 0).toFixed(3)}`),
+				h("span", { className: "dhac_statItem", title: "任务数" }, `任务 ${agent.stats.tasks ?? 0}`),
+				agent.stats.currentTask && h("span", { className: "dhac_statItem dhac_statTask", title: agent.stats.currentTask }, `当前: ${agent.stats.currentTask}`)
+			]),
 			ghost
 				? h("div", { className: "dhac_cardExited" }, [
 					"未运行（恢复失败或已关闭）— ",
@@ -625,7 +599,7 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 				])
 				: agent.exited
 					? h("div", { className: "dhac_cardExited" }, `进程已退出 (code ${agent.exitCode ?? "?"}) — 点击重新创建`)
-					: h("div", { className: "dhac_cardHint" }, "点击查看输出")
+					: h("div", { className: "dhac_cardHint" }, "点击查看详情与操作")
 		]);
 	}));
 }
@@ -633,8 +607,6 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
 	const [draft, setDraft] = useState("");
 	const [sending, setSending] = useState(false);
-	const [autoRefresh, setAutoRefresh] = useState(false);
-	const [refreshTick, setRefreshTick] = useState(0);
 	const ghost = agent.running === false;
 	const sendText = async () => {
 		const text = draft.trim();
@@ -649,6 +621,7 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 	const signalInt = () => {
 		apiPost(`/agents/${encodeURIComponent(agent.id)}/signal`, { signal: "SIGINT" }).catch(() => {});
 	};
+	const stats = agent.stats;
 	return h("div", { className: "dhac_root" }, [
 		h("div", { className: "dhac_toolbar" }, [
 			h("button", { type: "button", className: "dhac_iconButton", title: "返回列表", onClick: onBack }, h(Icon, { name: "chevron-left", size: 14 })),
@@ -659,9 +632,7 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, h(Icon, { name: "minimize", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "rotate-ccw", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: signalInt }, h(Icon, { name: "stop", size: 13 })),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 })),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "刷新输出", onClick: () => setRefreshTick((t) => t + 1) }, h(Icon, { name: "refresh-cw", size: 13 })),
-			!ghost && h("button", { type: "button", className: `dhac_iconButton dhac_toggleRefresh${autoRefresh ? " dhac_toggleRefreshOn" : ""}`, title: autoRefresh ? "自动刷新：开（每 2.5s）— 点击关闭" : "自动刷新：关 — 点击开启", onClick: () => setAutoRefresh((v) => !v) }, h(Icon, { name: "clock", size: 13 }))
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 }))
 		]),
 		ghost
 			? h("div", { className: "dhac_terminalDead" }, [
@@ -677,7 +648,19 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			: (agent.exited
 				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
 				: h("div", { className: "dhac_termBody" }, [
-					h(TailView, { agentId: agent.id, refreshTick, autoRefresh }),
+					h("div", { className: "dhac_detailInfo" }, [
+						h("span", { className: "dhac_statusText dhac_statusTextLg", "data-status": agent.status }, STATUS_LABEL[agent.status] ?? agent.status),
+						h("span", { className: "dhac_infoItem" }, [h(Icon, { name: "clock", size: 11, className: "dhac_inlineIcon" }), `开启 ${fmtTime(agent.createdAt)}`]),
+						h("span", { className: "dhac_infoItem" }, [h(Icon, { name: "stopwatch", size: 11, className: "dhac_inlineIcon" }), `运行 ${fmtUptime(agent.createdAt)}`]),
+						agent.external && h("span", { className: "dhac_infoItem" }, "herdr 托管")
+					]),
+					stats !== null && h("div", { className: "dhac_cardStats dhac_detailStats" }, [
+						h("span", { className: "dhac_statItem", title: "Token 消耗" }, `⚡ ${fmtTokens(stats.tokens ?? 0)}（入 ${fmtTokens(stats.tokensInput ?? 0)} / 出 ${fmtTokens(stats.tokensOutput ?? 0)}）`),
+						(stats.cost !== null && stats.cost !== void 0) && h("span", { className: "dhac_statItem", title: "成本（估算）" }, `$${(stats.cost ?? 0).toFixed(3)}`),
+						h("span", { className: "dhac_statItem", title: "任务数" }, `任务 ${stats.tasks ?? 0}`),
+						stats.title && h("span", { className: "dhac_statItem dhac_statTask" }, `会话: ${stats.title}`),
+						stats.currentTask && h("span", { className: "dhac_statItem dhac_statTask" }, `当前: ${stats.currentTask}`)
+					]),
 					h("div", { className: "dhac_sendBox" }, [
 						h("input", {
 							className: "dhac_input",
@@ -742,6 +725,12 @@ function RadarPanel(props) {
 	const [scanning, setScanning] = useState(false);
 	const [herdrInfo, setHerdrInfo] = useState({ available: false, version: null });
 	const [herdrSpace, setHerdrSpace] = useState(null);
+	// 1s 心跳：驱动「运行时间」实时走字（不依赖 WS 推送）。
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTick((t) => t + 1), 1000);
+		return () => clearInterval(timer);
+	}, []);
 	const { rootRef, onDragStart } = useDetailsColumn();
 	const sessionId = props.sessionId;
 	const sessionCwd = typeof props.useSessions === "function"
