@@ -182,7 +182,7 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	justify-content: center;
 	align-items: center;
 	gap: 6px;
-	min-height: 120px;
+	min-height: 96px;
 	flex-direction: column;
 	display: flex;
 	padding: 16px;
@@ -190,55 +190,24 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_emptyHint {
 	opacity: 0.85;
 }
-.dhac_agent {
-	border: 1px solid transparent;
-	cursor: pointer;
-	text-align: left;
-	background: none;
-	width: 100%;
-	border-radius: 8px;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 2px;
-	margin: 2px 0;
-	padding: 6px 8px;
-	display: flex;
-}
-.dhac_agent:hover {
-	background: var(--dsw-alias-interactive-bg-hover);
-}
-.dhac_agentActive {
-	background: var(--dsw-alias-interactive-bg-active);
-	border-color: var(--dsw-alias-border-l1);
-}
-.dhac_agentTop {
-	align-items: center;
-	gap: 6px;
-	min-width: 0;
-	display: flex;
-}
 .dhac_statusDot {
 	border-radius: 50%;
 	flex: none;
 	width: 7px;
 	height: 7px;
 }
+/* 运行中绿 / 启动中黄 / 已退出灰（终端宿主模式） */
 .dhac_statusDot[data-status="working"] {
-	background: var(--dsw-alias-state-warn-primary);
+	background: var(--dsw-alias-state-success-primary);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent);
+}
+.dhac_statusDot[data-status="starting"] {
+	background: var(--dsw-alias-state-warn-primary, #e5c07b);
 	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);
 	animation: dhacPulse 1.6s ease-in-out infinite;
 }
-.dhac_statusDot[data-status="idle"] {
-	background: var(--dsw-alias-state-success-primary);
-}
-.dhac_statusDot[data-status="blocked"] {
-	background: var(--dsw-alias-state-error-primary);
-}
-.dhac_statusDot[data-status="closing"] {
-	background: var(--dsw-alias-label-tertiary);
-	animation: dhacPulse 1.2s ease-in-out infinite;
-}
-.dhac_statusDot[data-status="exited"] {
+.dhac_statusDot[data-status="exited"],
+.dhac_statusDot[data-status="unknown"] {
 	background: var(--dsw-alias-label-tertiary);
 }
 @keyframes dhacPulse {
@@ -263,32 +232,6 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	flex: none;
 	padding: 1px 5px;
 }
-.dhac_agentRole {
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	padding-left: 13px;
-}
-.dhac_agentMeta {
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	padding-left: 13px;
-}
-.dhac_briefing {
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-state-warn-primary);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	padding-left: 13px;
-	animation: dhacPulse 1.6s ease-in-out infinite;
-}
-.dhac_briefingFailed {
-	color: var(--dsw-alias-state-error-primary);
-	animation: none;
-}
 .dhac_toolbar {
 	border-bottom: 1px solid var(--dsw-alias-border-l1);
 	background: var(--dsw-alias-bg-layer-1);
@@ -308,26 +251,13 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.dhac_terminalWrap {
-	flex: 1;
-	min-height: 0;
-	background: var(--dsw-alias-bg-base);
-	flex-direction: column;
-	display: flex;
-	position: relative;
-}
-.dhac_terminal {
-	flex: 1;
-	min-height: 0;
-	padding: 6px 4px 6px 8px;
-}
 .dhac_termBody {
 	flex: 1;
 	min-height: 0;
 	flex-direction: column;
 	display: flex;
 	padding: 10px 12px;
-	gap: 8px;
+	gap: 10px;
 }
 .dhac_detailInfo {
 	flex: none;
@@ -342,14 +272,10 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	font: var(--dsw-font-xxs-12);
 	color: var(--dsw-alias-label-tertiary);
 }
-.dhac_statusText[data-status="working"] { color: var(--dsw-alias-state-info-primary, #4aa8ff); }
-.dhac_statusText[data-status="blocked"] { color: var(--dsw-alias-state-danger-primary, #f26d6d); }
-.dhac_statusText[data-status="idle"], .dhac_statusText[data-status="done"] { color: var(--dsw-alias-state-success-primary); }
-.dhac_statusText[data-status="exited"] { color: var(--dsw-alias-label-tertiary); }
-.dhac_statusTextLg {
-	font: var(--dsw-font-sm-14);
-	font-weight: 600;
-}
+.dhac_statusText[data-status="working"] { color: var(--dsw-alias-state-success-primary); }
+.dhac_statusText[data-status="starting"] { color: var(--dsw-alias-state-warn-primary, #e5c07b); }
+.dhac_statusText[data-status="exited"],
+.dhac_statusText[data-status="unknown"] { color: var(--dsw-alias-label-tertiary); }
 .dhac_infoItem {
 	display: inline-flex;
 	align-items: center;
@@ -362,34 +288,9 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 4px 10px;
-	padding: 4px 10px 0;
+	padding: 4px 10px 8px;
 	font: var(--dsw-font-xxs-12);
 	color: var(--dsw-alias-label-secondary);
-}
-.dhac_cardStats {
-	flex: none;
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 10px;
-	padding: 2px 10px 6px;
-	font: var(--dsw-font-xxs-12);
-	color: var(--dsw-alias-label-secondary);
-}
-.dhac_detailStats {
-	padding: 0;
-}
-.dhac_statItem {
-	display: inline-flex;
-	align-items: center;
-	gap: 3px;
-	white-space: nowrap;
-}
-.dhac_statTask {
-	max-width: 100%;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	color: var(--dsw-alias-label-primary);
 }
 .dhac_sendBox {
 	flex: none;
@@ -402,7 +303,7 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_sendBox .dhac_input {
 	flex: 1;
 }
-/* ---- herdr host badge & workspace space tag ---- */
+/* ---- terminal host badge ---- */
 .dhac_hostBadge {
 	font: var(--dsw-font-xxxs-11);
 	color: var(--dsw-alias-label-tertiary);
@@ -411,27 +312,6 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	border-radius: 999px;
 	padding: 1px 8px;
 	white-space: nowrap;
-}
-.dhac_hostBadgeOn {
-	color: var(--dsw-alias-state-success-primary);
-	border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 40%, transparent);
-}
-.dhac_herdrSpaceTag {
-	display: inline-flex;
-	align-items: center;
-	gap: 3px;
-	color: var(--dsw-alias-state-info-primary, var(--dsw-alias-label-secondary));
-	font: var(--dsw-font-xxxs-11);
-	white-space: nowrap;
-}
-.dhac_herdrSpace {
-	display: flex;
-	align-items: flex-start;
-	gap: 5px;
-	line-height: 1.5;
-}
-.dhac_herdrSpaceNew {
-	color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
 }
 .dhac_modal {
 	position: fixed;
@@ -585,6 +465,20 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_btnPrimary:hover:not(:disabled) {
 	background: var(--dsw-alias-button-primary-hover);
 }
+/* 小号按钮（会话历史卡片）+ 危险按钮（删除） */
+.dhac_btnSm {
+	height: 22px;
+	padding: 0 9px;
+	font: var(--dsw-font-xxxs-strong-11);
+	border-radius: 5px;
+}
+.dhac_btnDanger {
+	color: var(--dsw-alias-state-error-primary);
+	border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent);
+}
+.dhac_btnDanger:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+}
 .dhac_error {
 	font: var(--dsw-font-xxs-12);
 	color: var(--dsw-alias-state-error-primary);
@@ -595,10 +489,44 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	line-height: 1.5;
 }
 
-/* ---- live terminal cards ---- */
+/* ---- 分区（运行中 / 会话历史）---- */
+.dhac_panel {
+	flex-direction: column;
+	gap: 14px;
+	display: flex;
+}
+.dhac_section {
+	flex-direction: column;
+	gap: 6px;
+	display: flex;
+	min-width: 0;
+}
+.dhac_sectionHeader {
+	align-items: center;
+	gap: 6px;
+	min-height: 22px;
+	display: flex;
+}
+.dhac_sectionTitle {
+	font: var(--dsw-font-xxs-strong-12);
+	color: var(--dsw-alias-label-secondary);
+}
+.dhac_sectionCount {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	background: var(--dsw-alias-interactive-bg-hover);
+	border-radius: 8px;
+	line-height: 15px;
+	padding: 0 6px;
+}
+.dhac_sectionSpacer {
+	flex: 1;
+}
+
+/* ---- 运行中卡片 ---- */
 .dhac_cards {
 	flex-direction: column;
-	gap: 8px;
+	gap: 6px;
 	display: flex;
 }
 .dhac_card {
@@ -614,18 +542,26 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_card:hover {
 	border-color: var(--dsw-alias-border-l2);
 }
+.dhac_cardExited {
+	opacity: 0.72;
+}
 .dhac_cardHeader {
 	align-items: center;
 	gap: 6px;
 	min-width: 0;
 	flex: none;
-	padding: 4px 6px 4px 8px;
-	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	padding: 6px 8px;
 	display: flex;
 }
-.dhac_cardClose {
-	width: 20px;
-	height: 20px;
+.dhac_cardActions {
+	flex: none;
+	align-items: center;
+	gap: 2px;
+	display: inline-flex;
+}
+.dhac_cardBtn {
+	width: 22px;
+	height: 22px;
 	color: var(--dsw-alias-label-tertiary);
 	cursor: pointer;
 	background: none;
@@ -636,29 +572,21 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	align-items: center;
 	padding: 0;
 	display: inline-flex;
-	font-size: 11px;
+	font-size: 12px;
 }
-.dhac_cardClose:hover {
+.dhac_cardBtn:hover {
 	background: var(--dsw-alias-interactive-bg-hover);
 	color: var(--dsw-alias-label-primary);
 }
-.dhac_cardHint {
-	height: 34px;
-	flex: none;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font: var(--dsw-font-xxs-12);
-	color: var(--dsw-alias-label-tertiary);
+.dhac_cardBtnDanger:hover {
+	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 18%, transparent);
+	color: var(--dsw-alias-state-error-primary);
 }
-.dhac_cardExited {
-	height: 148px;
+.dhac_cardExitedHint {
 	flex: none;
 	font: var(--dsw-font-xxs-12);
 	color: var(--dsw-alias-label-tertiary);
-	justify-content: center;
-	align-items: center;
-	display: flex;
+	padding: 0 10px 8px;
 }
 .dhac_terminalDead {
 	flex: 1;
@@ -667,14 +595,130 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	color: var(--dsw-alias-label-tertiary);
 	justify-content: center;
 	align-items: center;
-	gap: 8px;
-	flex-direction: column;
 	display: flex;
 	padding: 16px;
 	text-align: center;
 }
-.dhac_terminalDeadHint {
-	opacity: 0.85;
+.dhac_detailNote {
+	flex: none;
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	background: var(--dsw-alias-bg-layer-1);
+	border: 1px solid var(--dsw-alias-border-l1);
+	border-radius: 6px;
+	padding: 6px 8px;
+	display: flex;
+	align-items: center;
+	gap: 5px;
+}
+
+/* ---- 会话历史卡片 ---- */
+.dhac_historyList {
+	flex-direction: column;
+	gap: 6px;
+	display: flex;
+}
+.dhac_historyCard {
+	border: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-layer-1);
+	border-radius: 8px;
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 8px 10px;
+	display: flex;
+}
+.dhac_historyCard:hover {
+	border-color: var(--dsw-alias-border-l2);
+}
+.dhac_historyMain {
+	min-width: 0;
+	flex: 1;
+	flex-direction: column;
+	gap: 4px;
+	display: flex;
+}
+.dhac_historyTitleRow {
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	display: flex;
+}
+.dhac_historyTitle {
+	min-width: 0;
+	font: var(--dsw-font-xxs-strong-12);
+	color: var(--dsw-alias-label-primary);
+	flex: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.dhac_historyTime {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	flex: none;
+	white-space: nowrap;
+}
+.dhac_historyMeta {
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 8px;
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	display: flex;
+}
+.dhac_historyId {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.dhac_historyToken {
+	color: var(--dsw-alias-label-secondary);
+}
+.dhac_historyCost {
+	color: var(--dsw-alias-state-warn-primary, #e5c07b);
+}
+.dhac_historyActions {
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	display: flex;
+}
+.dhac_historyEmpty {
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-tertiary);
+	text-align: center;
+	border: 1px dashed var(--dsw-alias-border-l1);
+	border-radius: 8px;
+	padding: 14px 8px;
+}
+/* 引擎 chip：claude 橙 / opencode 绿 / codex 蓝 / codebuddy 紫 */
+.dhac_engineChip {
+	font: var(--dsw-font-xxxs-strong-11);
+	border: 1px solid transparent;
+	border-radius: 4px;
+	flex: none;
+	line-height: 16px;
+	padding: 0 5px;
+}
+.dhac_engineChip[data-engine="claude"] {
+	color: #e8a45c;
+	background: color-mix(in srgb, #e8a45c 14%, transparent);
+	border-color: color-mix(in srgb, #e8a45c 35%, transparent);
+}
+.dhac_engineChip[data-engine="opencode"] {
+	color: #7bd88f;
+	background: color-mix(in srgb, #7bd88f 14%, transparent);
+	border-color: color-mix(in srgb, #7bd88f 35%, transparent);
+}
+.dhac_engineChip[data-engine="codex"] {
+	color: #6cb6f5;
+	background: color-mix(in srgb, #6cb6f5 14%, transparent);
+	border-color: color-mix(in srgb, #6cb6f5 35%, transparent);
+}
+.dhac_engineChip[data-engine="codebuddy"] {
+	color: #c79af2;
+	background: color-mix(in srgb, #c79af2 14%, transparent);
+	border-color: color-mix(in srgb, #c79af2 35%, transparent);
 }
 
 /* ---- resize handle + status toasts ---- */
@@ -724,25 +768,4 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 }
 .dhac_toast_create {
 	border-color: var(--dsw-alias-state-business-primary);
-}
-
-/* ---- cache dialog ---- */
-.dhac_cacheRow {
-	border: 1px solid var(--dsw-alias-border-l1);
-	background: var(--dsw-alias-bg-base);
-	border-radius: 8px;
-	flex-direction: column;
-	gap: 2px;
-	padding: 8px 10px;
-	display: flex;
-}
-.dhac_cachePaths {
-	flex-direction: column;
-	gap: 1px;
-	display: flex;
-}
-.dhac_cachePath {
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	word-break: break-all;
 }

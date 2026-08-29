@@ -888,7 +888,7 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 	}));
 	register(defineTool({
 		name: "agent_read",
-		description: "Read the recent output of an agent terminal (last N bytes of its transcript, ANSI stripped). Use this to see what the agent is doing and collect its report after dispatching a task. Pair with agent_send: send a task, wait, read output until the agent reports completion (look for its summary / task-board update).",
+		description: "Read an agent's status (终端宿主模式下智能体跑在系统终端窗口，不提供实时输出；output 为空，status/exited 反映进程存活)。要了解结果请用会话历史：GET /agent-commander/api/sessions?cwd=<目录>，或直接查看系统终端窗口。",
 		parameters: {
 			id: {
 				type: "string",
