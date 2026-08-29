@@ -23,3 +23,16 @@
 - [x] 发布流程：scripts/release.mjs（构建→升版本→pack→commit+tag→清单；pnpm 失败回退 npm）
 - [ ] 重启 DSH 真机验证：侧边栏 herdr 徽标/空间标签/新建流程/只读 tail + 发送框
 - [ ] 合并 feat/herdr-adapter → main，`node scripts/release.mjs patch` 发布 v0.2.3
+
+---
+
+## 终端宿主模式（feat/terminal-host 分支，v0.3 方向）
+- [x] P1：terminal-launcher（open 拉起 Terminal/Ghostty/iTerm + pidfile 捕获 PID，已验证）
+      + process-monitor（kill -0 存活）+ keystroke（System Events 按键注入）
+- [x] P1：terminal-registry（create 拉起→2s 轮询灰/绿；send/approve 按键；signal=kill；restoreSession）
+- [x] P2：session-scanner 四引擎（claude jsonl/opencode db/codex rollout/codebuddy；实测 42 会话）
+- [x] P2：/terminal/status + /sessions + restore/delete API；移除 herdr/legacy（index.js 2850→1693 行）
+- [x] P3：雷达 UI 重写（运行中 + 会话历史，子代理完成，bundle 71783B）
+- [x] 安装目录已同步（client.js 71783B + 新模块）
+- [ ] 真机验证（重启 DSH）：新建→终端窗口→简报注入；会话历史恢复/删除；辅助功能授权
+- [ ] 发布 v0.3（node scripts/release.mjs patch）
