@@ -489,79 +489,10 @@ function NewAgentDialog({ terminalStatus, sessionId, sessionName, defaultCwd, on
 }
 
 // ---------------------------------------------------------------------------
-// AgentCards — 「运行中」区：列表 WS 的 agents（按 cwd 过滤）。
-// 卡片 = 状态点（working 绿 / exited 灰 / starting 黄）+ 名称 + 引擎标签 +
-// 状态文案 + 开启时间 + 运行时长 + 操作按钮（运行中：中断 SIGINT / 关闭；
-// 已退出灰卡：仅显示已退出）。点击卡片 → 详情。不显示实时输出。
+// SessionsSection — 会话历史列表（唯一列表）。运行中的会话：绿色边框 + 运行中
+// 指示 + 中断/关闭按钮（可点开详情）；未运行：灰色 + 恢复/删除。时间倒序。
 // ---------------------------------------------------------------------------
-function AgentCards({ agents, onOpen, onSignal, onCloseAgent }) {
-	return h("div", { className: "dhac_section" }, [
-		h("div", { className: "dhac_sectionHeader" }, [
-			h("span", { className: "dhac_sectionTitle" }, "运行中"),
-			h("span", { className: "dhac_sectionCount" }, `${agents.length} 个`),
-			h("span", { className: "dhac_sectionSpacer" })
-		]),
-		agents.length === 0
-			? h("div", { className: "dhac_empty" }, [
-				h("div", null, "还没有运行中的智能体"),
-				h("div", { className: "dhac_emptyHint" }, "点击右上角「新建」在系统终端窗口启动 claude / opencode / codex / codebuddy"),
-				h("div", { className: "dhac_emptyHint" }, "智能体共享记忆：.deepseek/memory.md · task-board.md · experience.md · handoffs/")
-			])
-			: h("div", { className: "dhac_cards" }, agents.map((agent) => {
-				const exited = agent.status === "exited" || agent.exited === true;
-				return h("div", {
-					key: agent.id,
-					className: `dhac_card${exited ? " dhac_cardExited" : ""}`,
-					onClick: () => onOpen(agent)
-				}, [
-					h("div", { className: "dhac_cardHeader" }, [
-						h("span", { className: "dhac_statusDot", "data-status": agent.status }),
-						h("span", { className: "dhac_agentName", title: agent.role || agent.cwd }, agent.name),
-						h("span", { className: "dhac_agentType" }, agent.type),
-						h("span", { className: "dhac_statusText", "data-status": agent.status }, STATUS_LABEL[agent.status] ?? agent.status),
-						!exited && h("span", { className: "dhac_cardActions" }, [
-							h("button", {
-								type: "button",
-								className: "dhac_cardBtn",
-								title: "中断 (Ctrl+C)",
-								onClick: (e) => {
-									e.stopPropagation();
-									onSignal(agent.id);
-								}
-							}, h(Icon, { name: "stop", size: 12 })),
-							h("button", {
-								type: "button",
-								className: "dhac_cardBtn dhac_cardBtnDanger",
-								title: "关闭智能体",
-								onClick: (e) => {
-									e.stopPropagation();
-									onCloseAgent(agent.id);
-								}
-							}, h(Icon, { name: "x", size: 12 }))
-						])
-					]),
-					exited
-						? h("div", { className: "dhac_cardExitedHint" }, `进程已退出（code ${agent.exitCode ?? "?"}）`)
-						: h("div", { className: "dhac_cardInfo" }, [
-							h("span", { className: "dhac_infoItem", title: "开启时间" }, [
-								h(Icon, { name: "clock", size: 11, className: "dhac_inlineIcon" }),
-								`开启 ${fmtTime(agent.createdAt)}`
-							]),
-							h("span", { className: "dhac_infoItem", title: "运行时长" }, [
-								h(Icon, { name: "stopwatch", size: 11, className: "dhac_inlineIcon" }),
-								`运行 ${fmtUptime(agent.createdAt)}`
-							])
-						])
-				]);
-			}))
-	]);
-}
-
-// ---------------------------------------------------------------------------
-// SessionsSection — 「会话历史」区：GET /sessions?cwd= 按时间倒序平铺。
-// 每张卡片：引擎 chip + 标题 + 相对时间 + 短 ID + token + cost + 恢复/删除。
-// ---------------------------------------------------------------------------
-function SessionsSection({ sessions, loading, onRefresh, onRestore, onDelete }) {
+function SessionsSection({ sessions, loading, onRefresh, onRestore, onDelete, onSignal, onCloseAgent, onOpenDetail }) {
 	return h("div", { className: "dhac_section" }, [
 		h("div", { className: "dhac_sectionHeader" }, [
 			h("span", { className: "dhac_sectionTitle" }, "会话历史"),
@@ -580,23 +511,36 @@ function SessionsSection({ sessions, loading, onRefresh, onRestore, onDelete }) 
 			: h("div", { className: "dhac_historyList" }, sessions.map((sess) => {
 				const engine = ENGINE_META[sess.engine]?.label ?? sess.engine;
 				const shortId = String(sess.id ?? "").slice(0, 8);
-				return h("div", { key: `${sess.engine}:${sess.id}`, className: "dhac_historyCard" }, [
+				const ra = sess.runningAgent;
+				return h("div", {
+					key: `${sess.engine}:${sess.id}`,
+					className: `dhac_historyCard${sess.running ? " dhac_historyCardRunning" : ""}`,
+					title: sess.running ? "运行中（点击查看详情）" : undefined,
+					onClick: sess.running && ra ? () => onOpenDetail(sess) : undefined
+				}, [
 					h("div", { className: "dhac_historyMain" }, [
 						h("div", { className: "dhac_historyTitleRow" }, [
 							h("span", { className: "dhac_engineChip", "data-engine": sess.engine }, engine),
+							sess.running && h("span", { className: "dhac_runningTag" }, "● 运行中"),
 							h("span", { className: "dhac_historyTitle", title: sess.title }, sess.title || `会话 ${shortId}`),
 							h("span", { className: "dhac_historyTime", title: fmtTime(sess.time) }, fmtRelative(sess.time))
 						]),
 						h("div", { className: "dhac_historyMeta" }, [
 							h("span", { className: "dhac_historyId", title: `完整会话 ID：${sess.id ?? ""}` }, `ID ${shortId}`),
 							Number(sess.tokens) > 0 && h("span", { className: "dhac_historyToken", title: "Token 消耗" }, `⚡ ${fmtTokens(sess.tokens)}`),
-							sess.cost !== null && sess.cost !== void 0 && h("span", { className: "dhac_historyCost", title: "成本（估算）" }, `$${Number(sess.cost).toFixed(3)}`)
+							sess.cost !== null && sess.cost !== void 0 && h("span", { className: "dhac_historyCost", title: "成本（估算）" }, `$${Number(sess.cost).toFixed(3)}`),
+							sess.running && ra && h("span", { className: "dhac_historyUptime", title: "运行时长" }, `运行 ${fmtUptime(ra.createdAt)}`)
 						])
 					]),
-					h("div", { className: "dhac_historyActions" }, [
-						h("button", { type: "button", className: "dhac_btn dhac_btnPrimary dhac_btnSm", title: "在系统终端新窗口恢复该会话", onClick: () => onRestore(sess) }, "恢复"),
-						h("button", { type: "button", className: "dhac_btn dhac_btnSm dhac_btnDanger", title: "删除该会话记录", onClick: () => onDelete(sess) }, "删除")
-					])
+					h("div", { className: "dhac_historyActions" }, sess.running && ra
+						? [
+							h("button", { type: "button", className: "dhac_btn dhac_btnSm", title: "中断 (Ctrl+C)", onClick: (e) => { e.stopPropagation(); onSignal(ra.agentId); } }, "中断"),
+							h("button", { type: "button", className: "dhac_btn dhac_btnSm dhac_btnDanger", title: "关闭智能体", onClick: (e) => { e.stopPropagation(); onCloseAgent(ra.agentId); } }, "关闭")
+						]
+						: [
+							h("button", { type: "button", className: "dhac_btn dhac_btnPrimary dhac_btnSm", title: "在系统终端新窗口恢复该会话", onClick: () => onRestore(sess) }, "恢复"),
+							h("button", { type: "button", className: "dhac_btn dhac_btnSm dhac_btnDanger", title: "删除该会话记录", onClick: () => onDelete(sess) }, "删除")
+						])
 				]);
 			}))
 	]);
@@ -705,7 +649,7 @@ var SafePanel = class extends react.Component {
 // ---------------------------------------------------------------------------
 function RadarPanel(props) {
 	const [agents, setAgentsState] = useState(getAgents);
-	const [detailId, setDetailId] = useState(null);
+	const [detailAgent, setDetailAgent] = useState(null);
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [toasts, setToasts] = useState([]);
 	const [workspaceCwd, setWorkspaceCwd] = useState(void 0);
@@ -771,7 +715,7 @@ function RadarPanel(props) {
 		const cwd = typeof sessionCwd === "string" && sessionCwd !== "" ? sessionCwd : void 0;
 		setWorkspaceCwd(cwd);
 		setListCwd(cwd);
-		setDetailId(null);
+		setDetailAgent(null);
 		loadSessions(cwd ?? "");
 	}, [sessionCwd, loadSessions]);
 
@@ -877,7 +821,25 @@ function RadarPanel(props) {
 		refreshAll();
 	}, [pushToast, refreshAll]);
 
-	const detail = detailId === null ? void 0 : agents.find((a) => a.id === detailId);
+	const detail = detailAgent;
+	const openSessionDetail = useCallback((sess) => {
+		const ra = sess.runningAgent;
+		if (!ra) return;
+		setDetailAgent({
+			id: ra.agentId,
+			type: ra.type ?? sess.engine,
+			name: ra.name ?? sess.title ?? sess.engine,
+			cwd: ra.cwd ?? workspaceCwd,
+			status: ra.status ?? "working",
+			exited: false,
+			exitCode: null,
+			pid: ra.pid ?? null,
+			sessionId: ra.sessionId ?? sess.id,
+			createdAt: ra.createdAt ?? Date.now(),
+			briefing: "none",
+			external: false
+		});
+	}, [workspaceCwd]);
 	const workspaceLabel = workspaceCwd !== void 0
 		? (workspaceCwd.split("/").filter(Boolean).pop() || workspaceCwd)
 		: "全部工作区";
@@ -891,7 +853,7 @@ function RadarPanel(props) {
 				className: "dhac_hostBadge",
 				title: terminalStatus?.app ? `终端宿主：${terminalStatus.app}` : "终端宿主"
 			}, hostLabel),
-			h("span", { className: "dhac_count" }, String(agents.length)),
+			h("span", { className: "dhac_count" }, String(sessions.length)),
 			h("button", { type: "button", className: "dhac_iconButton", title: "刷新（智能体 + 会话历史）", onClick: refreshAll, disabled: refreshing },
 				h(Icon, { name: "refresh-cw", size: 13, className: refreshing ? "dhac_spin" : "" })),
 			h("button", { type: "button", className: "dhac_addButton", onClick: () => setDialogOpen(true) }, [
@@ -909,10 +871,10 @@ function RadarPanel(props) {
 			toasts.map((t) =>
 				h("div", { key: t.id, className: `dhac_toast dhac_toast_${t.kind}` }, t.text))),
 		h("div", { className: "dhac_body" },
-			detail !== void 0
+			detail !== null
 				? h(TerminalDetail, {
 					agent: detail,
-					onBack: () => setDetailId(null),
+					onBack: () => setDetailAgent(null),
 					onCompact: compactSession,
 					onNewSession: newSession,
 					onSignal: signalAgent,
@@ -920,18 +882,15 @@ function RadarPanel(props) {
 					toast: pushToast
 				})
 				: h("div", { className: "dhac_panel" }, [
-					h(AgentCards, {
-						agents,
-						onOpen: (agent) => setDetailId(agent.id),
-						onSignal: signalAgent,
-						onCloseAgent: closeAgent
-					}),
 					h(SessionsSection, {
 						sessions,
 						loading: sessionsLoading,
 						onRefresh: () => loadSessions(workspaceCwd),
 						onRestore: restoreSession,
-						onDelete: deleteSession
+						onDelete: deleteSession,
+						onSignal: signalAgent,
+						onCloseAgent: closeAgent,
+						onOpenDetail: openSessionDetail
 					})
 				])),
 		dialogOpen &&

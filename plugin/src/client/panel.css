@@ -632,6 +632,22 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_historyCard:hover {
 	border-color: var(--dsw-alias-border-l2);
 }
+.dhac_historyCardRunning {
+	border-color: var(--dsw-alias-state-success-primary);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent);
+	cursor: pointer;
+}
+.dhac_runningTag {
+	font: var(--dsw-font-xxs-12);
+	font-weight: 600;
+	color: var(--dsw-alias-state-success-primary);
+	flex: none;
+	white-space: nowrap;
+}
+.dhac_historyUptime {
+	color: var(--dsw-alias-state-success-primary);
+	white-space: nowrap;
+}
 .dhac_historyMain {
 	min-width: 0;
 	flex: 1;

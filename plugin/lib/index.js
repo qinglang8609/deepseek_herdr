@@ -1284,7 +1284,21 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 			// 会话历史（cc-switch 式）：列出 / 恢复 / 删除
 			if (req.method === "GET" && path === "/sessions") {
 				const cwd = url.searchParams.get("cwd") ?? "";
-				writeOk(res, { sessions: cwd !== "" ? await scanner.list(cwd) : [] });
+				const sessions = cwd !== "" ? await scanner.list(cwd) : [];
+				// 标记运行中：精确匹配运行 handle 的 sessionId；否则该引擎+cwd 有
+				// 运行 handle 且是此引擎在该目录的最新会话（新建会话的近似）。
+				const running = registry.runningSessionKeys();
+				for (const s of sessions) {
+					const r = running.get(`${s.engine}:${cwd}`);
+					s.running = false;
+					if (r === void 0) continue;
+					const isLatest = sessions.filter((x) => x.engine === s.engine).findIndex((x) => x.id === s.id) === 0;
+					if (r.sessionId === s.id || isLatest) {
+						s.running = true;
+						s.runningAgent = r; // { agentId, name, pid, sessionId, status, createdAt }
+					}
+				}
+				writeOk(res, { sessions });
 				return;
 			}
 			if (req.method === "POST" && path === "/sessions/restore") {

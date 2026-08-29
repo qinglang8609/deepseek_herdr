@@ -248,6 +248,26 @@ export class TerminalAgentRegistry {
 	}
 
 	// ------------------------------------------------------------ operations
+	/** 运行中 handle 汇总（供 /sessions 标记 running）。key = `${engine}:${cwd}`。 */
+	runningSessionKeys() {
+		const out = new Map();
+		for (const h of this.agents.values()) {
+			if (h.exited) continue;
+			const key = `${h.type}:${h.cwd}`;
+			out.set(key, {
+				agentId: h.id,
+				name: h.name,
+				type: h.type,
+				cwd: h.cwd,
+				pid: h.pid,
+				sessionId: h.sessionId ?? "",
+				status: h.status,
+				createdAt: h.createdAt
+			});
+		}
+		return out;
+	}
+
 	async read(id, bytes) {
 		const handle = this.requireHandle(id);
 		// 系统终端无法读实时输出：返回空 + 状态（会话历史见 /sessions）。
