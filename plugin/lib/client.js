@@ -407,27 +407,17 @@ function NewAgentDialog({ terminalStatus, sessionId, sessionName, defaultCwd, on
 	const [type, setType] = useState("opencode");
 	const [name, setName] = useState("");
 	const [role, setRole] = useState("");
-	const [skills, setSkills] = useState([]);
 	const [cwd, setCwd] = useState(defaultCwd ?? "");
-	const [availableSkills, setAvailableSkills] = useState([]);
 	const [rolePresets, setRolePresets] = useState(DEFAULT_ROLE_PRESETS);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState(null);
 
 	useEffect(() => {
-		apiGet("/skills").then((value) => {
-			const list = value?.skills ?? [];
-			setAvailableSkills(list);
-			setSkills(list.map((s) => s.path));
-		}).catch(() => {});
 		getPluginConfig().then(() => {
 			setRolePresets(getRolePresets());
 		});
 	}, []);
 
-	const toggleSkill = (path) => {
-		setSkills((current) => (current.includes(path) ? current.filter((p) => p !== path) : [...current, path]));
-	};
 	const engines = Array.isArray(terminalStatus?.engines) && terminalStatus.engines.length > 0
 		? terminalStatus.engines
 		: ENGINE_TYPES.map((id) => ({ id, installed: true }));
@@ -442,7 +432,7 @@ function NewAgentDialog({ terminalStatus, sessionId, sessionName, defaultCwd, on
 		setBusy(true);
 		setError(null);
 		try {
-			const body = await apiPost("/agents", { sessionId, sessionName, type, name, role, skills, cwd });
+			const body = await apiPost("/agents", { sessionId, sessionName, type, name, role, cwd });
 			onCreated(body.agent);
 			onClose();
 		} catch (err) {
@@ -481,25 +471,10 @@ function NewAgentDialog({ terminalStatus, sessionId, sessionName, defaultCwd, on
 					})
 				]),
 				h("div", { className: "dhac_field" }, [
-					h("label", { className: "dhac_fieldLabel" }, "挂载技能（该智能体开工前必读）"),
-					availableSkills.length === 0
-						? h("div", { className: "dhac_hint" }, "未在 ~/.agents/skills 发现技能")
-						: h("div", { className: "dhac_skills" },
-							availableSkills.map((s) =>
-								h("label", { key: s.name, className: `dhac_skill${skills.includes(s.path) ? " dhac_skillSelected" : ""}` }, [
-									h("input", {
-										type: "checkbox",
-										checked: skills.includes(s.path),
-										onChange: () => toggleSkill(s.path)
-									}),
-									s.name
-								])))
-				]),
-				h("div", { className: "dhac_field" }, [
 					h("label", { className: "dhac_fieldLabel" }, "工作目录"),
 					h("input", { className: "dhac_input", value: cwd, placeholder: "默认：当前会话目录", onChange: (e) => setCwd(e.target.value) })
 				]),
-				h("div", { className: "dhac_hint" }, `将在 ${terminalLabel} 新窗口启动；角色/技能简报会自动注入（opencode 用 --prompt，claude/codex 用按键注入，需辅助功能权限）`),
+				h("div", { className: "dhac_hint" }, `将在 ${terminalLabel} 里新建窗口/面板启动；角色简报会自动注入（新建流程自动应答启动期确认弹窗，该点 yes 时点 yes，简报注入成功并验证落地后才算创建完成）`),
 				error !== null && h("div", { className: "dhac_error" }, error),
 				h("div", { className: "dhac_hint" }, "新建后该智能体会读取工作目录 .deepseek/ 下的 memory.md / task-board.md / experience.md，并遵循团队协作协议（完成后更新 task-board、产出写入 handoffs/、经验沉淀到 experience.md）。")
 			]),
@@ -515,20 +490,8 @@ function NewAgentDialog({ terminalStatus, sessionId, sessionName, defaultCwd, on
 // SessionsSection — 会话历史列表（唯一列表）。运行中的会话：绿色边框 + 运行中
 // 指示 + 中断/关闭按钮（可点开详情）；未运行：灰色 + 恢复/删除。时间倒序。
 // ---------------------------------------------------------------------------
-function SessionsSection({ sessions, loading, onRefresh, onRestore, onDelete, onSignal, onCloseAgent, onOpenDetail }) {
+function SessionsSection({ sessions, loading, onRestore, onDelete, onSignal, onCloseAgent, onOpenDetail }) {
 	return h("div", { className: "dhac_section" }, [
-		h("div", { className: "dhac_sectionHeader" }, [
-			h("span", { className: "dhac_sectionTitle" }, "会话历史"),
-			h("span", { className: "dhac_sectionCount" }, `${sessions.length} 个`),
-			h("span", { className: "dhac_sectionSpacer" }),
-			h("button", {
-				type: "button",
-				className: "dhac_iconButton",
-				title: "刷新会话历史",
-				onClick: onRefresh,
-				disabled: loading
-			}, h(Icon, { name: "refresh-cw", size: 12, className: loading ? "dhac_spin" : "" }))
-		]),
 		sessions.length === 0
 			? h("div", { className: "dhac_historyEmpty" }, loading ? "正在扫描会话历史…" : "暂无历史会话（claude / opencode / codex / codebuddy）")
 			: h("div", { className: "dhac_historyList" }, sessions.map((sess) => {
@@ -688,11 +651,21 @@ function RadarPanel(props) {
 	}, []);
 	const { rootRef, onDragStart } = useDetailsColumn();
 	const sessionId = props.sessionId;
+	// Prefer the definite `sessionId` prop (as DSH's own DetailsPanel does:
+	// `useSessions((list) => list.byId[sessionId]?.cwd)`), falling back to the
+	// list snapshot's `current` when the prop is absent — `current` can be
+	// undefined while `sessionId` is in scope, and vice versa.
 	const sessionCwd = typeof props.useSessions === "function"
-		? props.useSessions((s) => (s.current !== void 0 ? s.byId[s.current]?.cwd : void 0))
+		? props.useSessions((s) => {
+			const id = sessionId !== void 0 ? sessionId : s.current;
+			return id !== void 0 ? s.byId[id]?.cwd : void 0;
+		})
 		: void 0;
 	const sessionName = typeof props.useSessions === "function"
-		? props.useSessions((s) => (s.current !== void 0 ? s.byId[s.current]?.title : void 0))
+		? props.useSessions((s) => {
+			const id = sessionId !== void 0 ? sessionId : s.current;
+			return id !== void 0 ? s.byId[id]?.title : void 0;
+		})
 		: void 0;
 
 	const pushToast = useCallback((text, kind) => {
@@ -750,7 +723,8 @@ function RadarPanel(props) {
 	}, [workspaceCwd, loadSessions]);
 
 	// 运行中列表 WS 订阅：状态变更 toast（创建/退出/关闭）。cwd 切换时重置
-	// diff 基线，避免跨文件夹误报。
+	// diff 基线，避免跨文件夹误报。注入完成（briefing pending→done 或
+	// 启动中→运行中）时刷新会话历史 —— 对应「注入成功之后刷新会话历史」。
 	const prevRef = useRef([]);
 	const prevCwdRef = useRef(void 0);
 	useEffect(() => {
@@ -762,22 +736,31 @@ function RadarPanel(props) {
 			prevRef.current = next;
 			if (prev.length > 0) {
 				const byId = new Map(prev.map((a) => [a.id, a]));
+				let briefingDone = false;
 				for (const agent of next) {
 					const old = byId.get(agent.id);
 					if (old === void 0) {
 						pushToast(`智能体 ${agent.name}（${agent.type}）已在终端窗口启动`, "create");
-					} else if (old.status !== "exited" && agent.status === "exited") {
-						pushToast(`智能体 ${agent.name} 已退出`, "exit");
+					} else {
+						if (old.status !== "exited" && agent.status === "exited") {
+							pushToast(`智能体 ${agent.name} 已退出`, "exit");
+						}
+						const started = old.status === "starting" && agent.status !== "starting";
+						const injected = old.briefing === "pending" && agent.briefing === "done";
+						if (started || injected) briefingDone = true;
 					}
 				}
 				for (const agent of prev) {
 					if (!next.some((a) => a.id === agent.id)) pushToast(`智能体 ${agent.name} 已关闭`, "exit");
 				}
+				if (briefingDone && typeof cwdNow === "string" && cwdNow !== "") {
+					loadSessions(cwdNow);
+				}
 			}
 			setAgentsState(next);
 		});
 		return unsub;
-	}, [pushToast]);
+	}, [pushToast, loadSessions]);
 
 	// ---- 运行中 agent 操作 ----
 	const signalAgent = useCallback(async (id) => {
@@ -866,16 +849,11 @@ function RadarPanel(props) {
 	const workspaceLabel = workspaceCwd !== void 0
 		? (workspaceCwd.split("/").filter(Boolean).pop() || workspaceCwd)
 		: "全部工作区";
-	const hostLabel = terminalStatus?.label ? `终端 · ${terminalStatus.label}` : "终端";
 
 	return h("div", { ref: rootRef, className: "dhac_root" }, [
 		h("div", { className: "dhac_resizeHandle", title: "拖拽调整宽度", onPointerDown: onDragStart }),
 		h("div", { className: "dhac_header" }, [
 			h("span", { className: "dhac_headerTitle" }, "智能体雷达"),
-			h("span", {
-				className: "dhac_hostBadge",
-				title: terminalStatus?.app ? `终端宿主：${terminalStatus.app}` : "终端宿主"
-			}, hostLabel),
 			h("span", { className: "dhac_count" }, String(sessions.length)),
 			h("button", { type: "button", className: "dhac_iconButton", title: "刷新（智能体 + 会话历史）", onClick: refreshAll, disabled: refreshing },
 				h(Icon, { name: "refresh-cw", size: 13, className: refreshing ? "dhac_spin" : "" })),
@@ -908,7 +886,6 @@ function RadarPanel(props) {
 					h(SessionsSection, {
 						sessions,
 						loading: sessionsLoading,
-						onRefresh: () => loadSessions(workspaceCwd),
 						onRestore: restoreSession,
 						onDelete: deleteSession,
 						onSignal: signalAgent,

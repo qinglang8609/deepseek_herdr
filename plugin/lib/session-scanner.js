@@ -33,9 +33,20 @@ const execFileAsync = (cmd, args, opts = {}) => new Promise((resolve, reject) =>
 	});
 });
 
-/** cwd → claude/codebuddy 项目目录 slug（非字母数字 → '-'）。 */
+/** cwd → claude 项目目录 slug（非字母数字 → '-'）。 */
 export function slugOf(cwd) {
 	return String(cwd ?? "").replace(/[^a-zA-Z0-9]+/g, "-");
+}
+
+/**
+ * cwd → codebuddy 项目目录 slug（实测与 claude 不同）：
+ *   • 去掉开头的 '/'（不产生前导 '-'）；
+ *   • 保留下划线 '_'（deepseek_herdr 保持原样），其余非字母数字 → '-'
+ * 例：/Users/fanchao/Code/deepseek_herdr → Users-fanchao-Code-deepseek_herdr
+ *    （claude 的 slugOf 会得到 -Users-fanchao-Code-deepseek-herdr，目录不存在 → 历史不显示）
+ */
+export function codebuddySlugOf(cwd) {
+	return String(cwd ?? "").replace(/^\/+/, "").replace(/[^a-zA-Z0-9_]+/g, "-");
 }
 
 export class SessionScanner {
@@ -148,13 +159,13 @@ export class SessionScanner {
 
 	// --------------------------------------------------------- codebuddy
 	async listCodebuddy(cwd) {
-		const dir = join(CODEBUDDY_PROJECTS, slugOf(cwd));
+		const dir = join(CODEBUDDY_PROJECTS, codebuddySlugOf(cwd));
 		if (!existsSync(dir)) return [];
 		const out = [];
 		for (const f of readdirSync(dir).filter((x) => x.endsWith(".jsonl"))) {
 			const full = join(dir, f);
 			const st = statSync(full);
-			const info = this._cached(full, st);
+			const info = this._cachedCodebuddy(full, st);
 			const id = f.replace(/\.jsonl$/, "");
 			out.push({
 				engine: "codebuddy",
@@ -177,7 +188,7 @@ export class SessionScanner {
 			return;
 		}
 		if (engine === "codebuddy") {
-			const p = join(CODEBUDDY_PROJECTS, slugOf(cwd), `${id}.jsonl`);
+			const p = join(CODEBUDDY_PROJECTS, codebuddySlugOf(cwd), `${id}.jsonl`);
 			if (existsSync(p)) unlinkSync(p);
 			return;
 		}
@@ -243,6 +254,16 @@ export class SessionScanner {
 		return info;
 	}
 
+	/** codebuddy jsonl 独立缓存（格式与 claude 不同，用独立 key 前缀防串）。 */
+	_cachedCodebuddy(path, st) {
+		const key = `cb:${path}:${st.mtimeMs}:${st.size}`;
+		const hit = this._cache.get(key);
+		if (hit !== void 0) return hit;
+		const info = this._parseCodebuddyJsonl(path);
+		this._cache.set(key, info);
+		return info;
+	}
+
 	/** 解析 claude/codebuddy 风格 jsonl：标题（首个 user 文本）+ token 汇总。 */
 	_parseJsonl(path) {
 		const info = { title: null, tokens: 0, cost: null };
@@ -282,6 +303,46 @@ export class SessionScanner {
 		} catch {}
 		info.tokens = tIn + tOut;
 		info.cost = null; // 不做成本估算（claude 计费复杂）
+		return info;
+	}
+
+	/**
+	 * 解析 codebuddy 风格 jsonl（与 claude 不同）：
+	 *   • 记录无 `type:"user"`，而是 `{"type":"message","role":"user",...}`；
+	 *   • 文本在 content[] 的 `input_text` 项里；
+	 *   • CLI 启动时会自注入 `<system-reminder data-role="command-caveat">`
+	 *     消息（providerData.skipRun=true），应跳过，取第一条真实用户消息为标题；
+	 *   • jsonl 里没有 usage 字段 → token 统计留 0。
+	 */
+	_parseCodebuddyJsonl(path) {
+		const info = { title: null, tokens: 0, cost: null };
+		try {
+			const lines = readFileSync(path, "utf8").split("\n");
+			const limit = Math.min(lines.length, 4000);
+			for (let i = 0; i < limit; i++) {
+				const line = lines[i];
+				if (line === "") continue;
+				let d;
+				try {
+					d = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				if (d?.type === "message" && d?.role === "user" && d?.providerData?.skipRun !== true) {
+					const c = d.content;
+					const text = Array.isArray(c)
+						? c.filter((p) => typeof p === "string" || p?.type === "input_text" || p?.type === "text")
+							.map((p) => (typeof p === "string" ? p : p.text ?? ""))
+							.join(" ")
+							.trim()
+						: "";
+					if (text !== "" && !text.startsWith("<system-reminder")) {
+						info.title = text.slice(0, 60);
+						break;
+					}
+				}
+			}
+		} catch {}
 		return info;
 	}
 }

@@ -10,8 +10,8 @@
 // ============================================================================
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { TerminalLauncher, shq, waitForPidfile } from "./terminal-launcher.js";
 import { isAlive, sendSignal } from "./process-monitor.js";
@@ -21,6 +21,14 @@ export const ENGINE_TYPES = ["claude", "opencode", "codex", "codebuddy"];
 
 const POLL_MS = 2000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function statOf(p) {
+	try {
+		return statSync(p);
+	} catch {
+		return null;
+	}
+}
 
 /** 引擎启动/恢复命令模板。binary 用绝对路径（resolve 后注入）。 */
 const ENGINE_COMMANDS = {
@@ -54,7 +62,7 @@ const ENGINE_COMMANDS = {
 	}
 };
 
-/** 解析引擎二进制：PATH + 常见目录。 */
+/** 解析引擎二进制：PATH + 常见目录 + nvm 版本目录（codebuddy 常装在 nvm node 下）。 */
 export function resolveEngineBinary(engine) {
 	const names = { claude: "claude", opencode: "opencode", codex: "codex", codebuddy: "codebuddy" };
 	const name = names[engine];
@@ -67,6 +75,13 @@ export function resolveEngineBinary(engine) {
 		"/opt/homebrew/bin/" + name,
 		"/usr/local/bin/" + name
 	);
+	// nvm：~/.nvm/versions/node/<ver>/bin/<name>（实测 codebuddy 装在这里）
+	try {
+		const nvmRoot = join(process.env.HOME ?? "", ".nvm", "versions", "node");
+		for (const version of readdirSync(nvmRoot)) {
+			candidates.push(join(nvmRoot, version, "bin", name));
+		}
+	} catch {}
 	for (const c of candidates) {
 		try {
 			if (existsSync(c)) return c;
@@ -186,16 +201,21 @@ export class TerminalAgentRegistry {
 			handle.terminalApp = launched.app;
 			const pid = await waitForPidfile(pidfile, 25000);
 			handle.pid = pid;
-			handle.status = pid !== null ? "working" : "unknown";
+			if (pid !== null && handle.briefing === "pending" && type !== "opencode") {
+				// 启动监控在后台执行（不阻塞创建返回，避免对话框卡死）：等 CLI 就绪
+				// → 自动应答启动期确认弹窗 → 按键注入简报 → 会话文件验证落地；
+				// 注入完成 briefing=done → WS 推送 → 客户端刷新会话历史。
+				handle.status = "starting";
+				this.updated(handle);
+				this.monitorStartup(handle, briefing);
+			} else {
+				handle.status = pid !== null ? "working" : "unknown";
+				this.updated(handle);
+			}
 		} catch (error) {
 			this.agents.delete(agentId);
 			this.notify();
 			throw error;
-		}
-		this.updated(handle);
-		// 简报注入（异步）：opencode 已随 --prompt 注入；claude/codex 用按键注入。
-		if (handle.briefing === "pending" && type !== "opencode") {
-			this.injectBriefing(handle, briefing);
 		}
 		return handle;
 	}
@@ -420,7 +440,7 @@ export class TerminalAgentRegistry {
 		return lines.join("\n");
 	}
 
-	/** 按键注入简报（claude/codex/codebuddy；需辅助功能权限）。 */
+	/** 按键注入简报（claude/codebuddy/codex；需辅助功能权限）。 */
 	injectBriefing(handle, briefing) {
 		(async () => {
 			for (let attempt = 0; attempt < 3; attempt++) {
@@ -441,6 +461,182 @@ export class TerminalAgentRegistry {
 			handle.briefing = "pending";
 			this.updated(handle);
 		})();
+	}
+
+	// ------------------------------------------------------------ 启动监控
+	/**
+	 * 新建流程的启动监控（终端宿主模式无 pty，用「会话文件」作为 CLI 输出代理）：
+	 *   1. 等待 CLI 就绪 —— 引擎在自己的会话目录里写下首个会话文件（claude /
+	 *      codebuddy 的 <sessionId>.jsonl，codex 的 rollout-*.jsonl）；
+	 *   2. 期间自动应答启动确认弹窗 —— codebuddy 对未信任目录会弹文件夹信任询问
+	 *      （默认项 = Yes），未信任时按节奏发回车「该点 yes 时点 yes」；
+	 *   3. 就绪后按键注入角色/技能简报（activate + typeTextAndEnter）；
+	 *   4. 在会话文件里验证简报落地（出现 "[dsh-agent-commander]" 用户消息）——
+	 *      落地才置 briefing=done；否则回车一次（排掉可能的残留确认框）重试，
+	 *      最多 3 次；总时长受限，超时降级 briefing=pending 但不失败。
+	 */
+	async monitorStartup(handle, briefing) {
+		const marker = "[dsh-agent-commander]";
+		const startedAt = Date.now();
+		const CAP_MS = 75000; // 整个监控的硬上限
+		// codebuddy 未信任该目录 → 启动时必弹文件夹信任确认 → 需要自动回车协助
+		const needTrustAssist = handle.type === "codebuddy" && !this._codebuddyTrusted(handle.cwd);
+		let trustPushes = 0;
+
+		// ---- Phase 1: 等 CLI 就绪（会话文件出现），期间自动回车应答信任弹窗
+		let sessionFile = null;
+		while (Date.now() - startedAt < CAP_MS) {
+			if (handle.exited) return;
+			sessionFile = this._latestSessionFile(handle);
+			if (sessionFile !== null) break;
+			if (needTrustAssist && trustPushes < 6 && Date.now() - startedAt > 1500) {
+				trustPushes++;
+				try {
+					await this._activate(handle);
+					await pressKey("return");
+				} catch {}
+			}
+			await sleep(800);
+		}
+		if (sessionFile === null) {
+			// CLI 一直没写下会话文件（启动异常/卡死）——不阻塞创建，标记待注入
+			handle.briefing = "pending";
+			handle.status = "working";
+			this.updated(handle);
+			return;
+		}
+
+		// ---- Phase 2: 注入简报 + 验证落地（最多 3 次，总时长受 CAP_MS 约束）
+		for (let attempt = 0; attempt < 3 && Date.now() - startedAt < CAP_MS; attempt++) {
+			if (handle.exited) return;
+			try {
+				await this._activate(handle);
+				await typeTextAndEnter(briefing);
+			} catch {
+				break; // 无辅助功能权限等：注入不可行，放弃（不阻塞创建）
+			}
+			const verifyDeadline = Math.min(Date.now() + 15000, startedAt + CAP_MS);
+			while (Date.now() < verifyDeadline) {
+				if (handle.exited) return;
+				if (this._briefingLanded(handle, marker)) {
+					handle.briefing = "done";
+					handle.status = "working";
+					this.updated(handle);
+					return;
+				}
+				await sleep(800);
+			}
+			// 未落地：可能卡在残留确认框 → 回车一次再重试
+			try {
+				await this._activate(handle);
+				await pressKey("return");
+			} catch {}
+		}
+		handle.briefing = "pending";
+		handle.status = "working";
+		this.updated(handle);
+	}
+
+	/** 激活该 agent 所在的终端 App 到前台（按键注入前提）。 */
+	async _activate(handle) {
+		if (!handle.terminalApp) return;
+		await activateApp(handle.terminalApp === "terminal" ? "Terminal" : handle.terminalApp);
+	}
+
+	/** codebuddy 是否已信任该目录（trustedDirectories 含 cwd → 无信任弹窗）。 */
+	_codebuddyTrusted(cwd) {
+		try {
+			const settings = JSON.parse(readFileSync(join(homedir(), ".codebuddy", "settings.json"), "utf8"));
+			const list = Array.isArray(settings?.trustedDirectories) ? settings.trustedDirectories : [];
+			return list.includes(cwd);
+		} catch {
+			return false;
+		}
+	}
+
+	/** 引擎的会话目录（claude/codebuddy 的 projects/<slug>；codex 的 sessions 树）。 */
+	_sessionDir(handle) {
+		if (handle.type === "claude") {
+			return join(homedir(), ".claude", "projects", String(handle.cwd ?? "").replace(/[^a-zA-Z0-9]+/g, "-"));
+		}
+		if (handle.type === "codebuddy") {
+			// codebuddy slug 与 claude 不同：去前导 '/',保留下划线（见 session-scanner.codebuddySlugOf）
+			return join(homedir(), ".codebuddy", "projects", String(handle.cwd ?? "").replace(/^\/+/, "").replace(/[^a-zA-Z0-9_]+/g, "-"));
+		}
+		if (handle.type === "codex") {
+			return join(homedir(), ".codex", "sessions");
+		}
+		return null;
+	}
+
+	/**
+	 * 找「本次启动」对应的最新会话文件（mtime >= handle.createdAt - 5s 容差）。
+	 * claude/codebuddy：projects/<slug>/ 下的 .jsonl；codex：sessions 树里
+	 * session_meta.cwd 匹配的 rollout-*.jsonl。找不到返回 null。
+	 */
+	_latestSessionFile(handle) {
+		const dir = this._sessionDir(handle);
+		if (dir === null) return null;
+		const bornAfter = (handle.createdAt ?? 0) - 5000;
+		try {
+			if (handle.type === "claude" || handle.type === "codebuddy") {
+				let best = null;
+				for (const f of readdirSync(dir)) {
+					if (!f.endsWith(".jsonl")) continue;
+					const full = join(dir, f);
+					let st;
+					try {
+						st = statOf(full);
+					} catch {
+						continue;
+					}
+					if (st === null || st.mtimeMs < bornAfter) continue;
+					if (best === null || st.mtimeMs > best.mtimeMs) best = { path: full, mtimeMs: st.mtimeMs };
+				}
+				return best;
+			}
+			if (handle.type === "codex") {
+				let best = null;
+				const walk = (d) => {
+					let entries = [];
+					try {
+						entries = readdirSync(d, { withFileTypes: true });
+					} catch {
+						return;
+					}
+					for (const e of entries) {
+						const p = join(d, e.name);
+						if (e.isDirectory()) {
+							walk(p);
+						} else if (e.name.endsWith(".jsonl")) {
+							try {
+								const st = statOf(p);
+								if (st === null || st.mtimeMs < bornAfter) continue;
+								const first = readFileSync(p, "utf8").split("\n").find((l) => l.includes("session_meta"));
+								const meta = first ? JSON.parse(first).payload ?? {} : {};
+								if (meta.cwd !== handle.cwd) continue;
+								if (best === null || st.mtimeMs > best.mtimeMs) best = { path: p, mtimeMs: st.mtimeMs };
+							} catch {}
+						}
+					}
+				};
+				walk(dir);
+				return best;
+			}
+		} catch {}
+		return null;
+	}
+
+	/** 简报是否已落地：最新会话文件里出现含 marker 的用户消息（JSON 原文即可）。 */
+	_briefingLanded(handle, marker) {
+		const found = this._latestSessionFile(handle);
+		if (found === null) return false;
+		try {
+			const tail = readFileSync(found.path, "utf8").slice(-131072);
+			return tail.includes(marker);
+		} catch {
+			return false;
+		}
 	}
 
 	shutdown() {

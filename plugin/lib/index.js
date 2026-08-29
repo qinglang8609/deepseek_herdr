@@ -25,12 +25,12 @@ import { dirname, join, isAbsolute, resolve, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { defineTool } from "@deepseek-ai/dsh-tools";
-import { Service } from "@deepseek-ai/cordis";
-import Schema from "@deepseek-ai/schemastery";
 import { TerminalAgentRegistry, ENGINE_TYPES } from "./terminal-registry.js";
 import { SessionScanner } from "./session-scanner.js";
 import { TerminalLauncher } from "./terminal-launcher.js";
+import { HerdrAdapter } from "./herdr-adapter.js";
+import { HerdrAgentRegistry, HERDR_KIND_MAP } from "./herdr-registry.js";
+import { CompositeRegistry } from "./composite-registry.js";
 
 const require = createRequire(import.meta.url);
 
@@ -73,6 +73,35 @@ function getWs() {
 	if (wsModule === null) wsModule = fallbackRequire("ws");
 	return wsModule;
 }
+// ---------------------------------------------------------------------------
+// Harness runtime packages — @deepseek-ai/dsh-tools, @deepseek-ai/cordis and
+// @deepseek-ai/schemastery are ESM-only and are NOT part of this plugin's own
+// dependency tree. When the plugin is installed as a pnpm `link:` (symlink →
+// this checkout), Node resolves the entry from its realpath, so bare imports
+// would miss the profile's node_modules — exactly the failure mode that
+// `fallbackRequire` above already handles for `ws` / `node-pty`.
+//
+// createRequire().resolve() only LOCATES the entry file (it never executes the
+// module, so it works for ESM-only packages on any Node), and then import() of
+// the absolute path loads it without any node_modules walk. Top-level await
+// keeps the rest of the module body (Config, Service subclass) running in the
+// normal synchronous order — the cordis loader awaits the entry import anyway.
+// ---------------------------------------------------------------------------
+function resolveFromAnchors(spec) {
+	const anchors = moduleAnchors();
+	let lastError = null;
+	for (const anchor of anchors) {
+		try {
+			return createRequire(anchor).resolve(spec);
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError ?? new Error(`cannot resolve "${spec}" from any module anchor`);
+}
+const { defineTool } = await import(pathToFileURL(resolveFromAnchors("@deepseek-ai/dsh-tools")).href);
+const { Service } = await import(pathToFileURL(resolveFromAnchors("@deepseek-ai/cordis")).href);
+const { default: Schema } = await import(pathToFileURL(resolveFromAnchors("@deepseek-ai/schemastery")).href);
 
 const API_PREFIX = "/agent-commander/api";
 const WS_LIST = "/agent-commander/ws/list";
@@ -263,6 +292,26 @@ function isTrustedApiRequest(request, trustedHosts) {
 // ---------------------------------------------------------------------------
 // node-pty lazy load + spawn-helper fix (same discipline as dsh-better-sidebar)
 // ---------------------------------------------------------------------------
+/** 二进制搜索目录：PATH + 常见安装位置 + nvm 版本目录（codebuddy 常装在 nvm 下）。 */
+function searchPathDirs() {
+	const dirs = [];
+	for (const dir of (process.env.PATH ?? "").split(":").filter(Boolean)) {
+		if (dir !== "") dirs.push(dir);
+	}
+	dirs.push(
+		join(homedir(), ".local", "bin"),
+		join(homedir(), ".opencode", "bin"),
+		"/opt/homebrew/bin",
+		"/usr/local/bin"
+	);
+	try {
+		const nvmRoot = join(homedir(), ".nvm", "versions", "node");
+		for (const version of readdirSync(nvmRoot)) {
+			dirs.push(join(nvmRoot, version, "bin"));
+		}
+	} catch {}
+	return dirs;
+}
 function resolveBinary(type) {
 	if (!AGENT_TYPES.includes(type)) return null;
 	for (const dir of searchPathDirs()) {
@@ -361,7 +410,13 @@ export const Config = Schema.object({
 	 * terminal（Terminal.app）| ghostty | iterm2。智能体跑在系统终端窗口里，
 	 * 不在浏览器渲染终端；会话历史管理见 docs/terminal-host-dev.md。
 	 */
-	terminalApp: Schema.union(["auto", "terminal", "ghostty", "iterm2"]).default("auto")
+	terminalApp: Schema.union(["auto", "terminal", "ghostty", "iterm2"]).default("auto"),
+	/**
+	 * 智能体宿主：herdr（tmux pane 接管终端，会话即窗口，agent.conf 实时登记
+	 * paneId/type/会话缓存ID）| terminal-host（系统终端窗口）| auto（优先 herdr，
+	 * 不可用回退 terminal-host）。
+	 */
+	agentHost: Schema.union(["auto", "herdr", "terminal-host"]).default("auto")
 });
 
 const MEMORY_FILES = {
@@ -1239,6 +1294,68 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 }
 
 // ---------------------------------------------------------------------------
+// HTTP/WS helpers — restored from ec254af (were dropped in 0284791's terminal-
+// host rewrite while all call sites stayed: every /agent-commander/api request
+// threw ReferenceError → webServer 400 → client silently kept 0 sessions).
+// ---------------------------------------------------------------------------
+function writeJson(res, status, body) {
+	const payload = JSON.stringify(body);
+	res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+	res.end(payload);
+}
+function writeOk(res, value) {
+	writeJson(res, 200, { ok: true, value });
+}
+function writeError(res, error) {
+	const status = typeof error?.status === "number" ? error.status : 500;
+	writeJson(res, status, {
+		ok: false,
+		error: {
+			code: "agent-commander-error",
+			message: error instanceof Error ? error.message : String(error)
+		}
+	});
+}
+function readBody(req, limit = BODY_LIMIT) {
+	return new Promise((resolvePromise, reject) => {
+		const chunks = [];
+		let total = 0;
+		req.on("data", (chunk) => {
+			total += chunk.length;
+			if (total > limit) {
+				req.destroy();
+				reject(new Error("request body too large"));
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on("end", () => {
+			if (req.destroyed) return;
+			const raw = Buffer.concat(chunks).toString("utf8").trim();
+			if (raw === "") {
+				resolvePromise({});
+				return;
+			}
+			try {
+				resolvePromise(JSON.parse(raw));
+			} catch (error) {
+				reject(error);
+			}
+		});
+		req.on("error", reject);
+	});
+}
+// Also dropped in 0284791 while call sites remained (sessions restore/delete,
+// agent open/send/approve/… all route through it) — restore alongside the
+// write helpers above.
+function sessionCwdOf(ctx, sessionId, fallback) {
+	const headerCwd = sessionId === void 0 ? void 0 : ctx.sessions.get(sessionId)?.header?.cwd;
+	if (headerCwd !== void 0 && headerCwd !== "") return headerCwd;
+	if (fallback !== void 0 && fallback !== "") return validateCwd(fallback, undefined);
+	return process.cwd();
+}
+
+// ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
 function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scanner = null) {
@@ -1281,22 +1398,58 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 				});
 				return;
 			}
-			// 会话历史（cc-switch 式）：列出 / 恢复 / 删除
+			// 会话历史（cc-switch 式）：列出 / 恢复 / 删除。
+			// 会话即窗口：herdr 实时窗口与历史会话合并对接。
 			if (req.method === "GET" && path === "/sessions") {
 				const cwd = url.searchParams.get("cwd") ?? "";
 				const sessions = cwd !== "" ? await scanner.list(cwd) : [];
-				// 标记运行中：精确匹配运行 handle 的 sessionId；否则该引擎+cwd 有
-				// 运行 handle 且是此引擎在该目录的最新会话（新建会话的近似）。
 				const running = registry.runningSessionKeys();
+				const engineSessions = new Map(); // engine → 该 cwd 的历史会话（按时间倒序）
 				for (const s of sessions) {
-					const r = running.get(`${s.engine}:${cwd}`);
-					s.running = false;
-					if (r === void 0) continue;
-					const isLatest = sessions.filter((x) => x.engine === s.engine).findIndex((x) => x.id === s.id) === 0;
-					if (r.sessionId === s.id || isLatest) {
-						s.running = true;
-						s.runningAgent = r; // { agentId, name, pid, sessionId, status, createdAt }
+					if (cwd !== "" && s.cwd !== cwd) continue;
+					if (!engineSessions.has(s.engine)) engineSessions.set(s.engine, []);
+					engineSessions.get(s.engine).push(s);
+				}
+				for (const s of sessions) s.running = false;
+				const matched = new Set(); // `${engine}:${sessionId}` 已匹配
+				for (const [key, r] of running) {
+					if (cwd !== "" && !key.endsWith(`:${cwd}`)) continue;
+					const engine = key.slice(0, key.length - cwd.length - 1);
+					const list = engineSessions.get(engine) ?? [];
+					// 1) 精确命中：窗口的会话缓存 ID == 历史会话 id。
+					let hit = r.sessionId !== "" ? list.find((s) => s.id === r.sessionId) : void 0;
+					// 2) 临时命中：窗口尚无会话 ID（claude 集成不上报、新建初期）→
+					//    匹配「窗口启动之后」的最新历史会话 —— 绝不用全局最新，
+					//    否则会误标上一个窗口的旧会话。
+					if (hit === void 0 && r.sessionId === "" && Number.isFinite(r.createdAt)) {
+						hit = list.find((s) => (s.time ?? 0) >= (r.createdAt ?? 0) - 5000);
 					}
+					if (hit !== void 0) {
+						hit.running = true;
+						hit.runningAgent = r; // { agentId, name, pid, sessionId, status, createdAt, paneId }
+						matched.add(`${engine}:${hit.id}`);
+					}
+				}
+				// 3) 仍未被任何历史会话承接的窗口 → 以「运行中」条目追加（会话即窗口：
+				//    窗口本身就是一个会话；会话 ID 未探测到时用 live:<agentId> 占位，
+				//    探测到后精确命中、占位条目自然消失）。
+				for (const [key, r] of running) {
+					if (cwd !== "" && !key.endsWith(`:${cwd}`)) continue;
+					const engine = key.slice(0, key.length - cwd.length - 1);
+					const id = r.sessionId !== "" ? r.sessionId : `live:${r.agentId}`;
+					if (matched.has(`${engine}:${id}`)) continue;
+					sessions.push({
+						engine,
+						id,
+						title: `运行中：${r.name}`,
+						time: r.createdAt ?? Date.now(),
+						tokens: 0,
+						cost: null,
+						cwd,
+						running: true,
+						runningAgent: r
+					});
+					matched.add(`${engine}:${id}`);
 				}
 				writeOk(res, { sessions });
 				return;
@@ -1544,11 +1697,11 @@ export class AgentCommanderService extends Service {
 				order: 150,
 				text: [
 					"团队智能体（Agent Radar）：",
-					"右侧「智能体雷达」面板管理系统终端窗口里的真实智能体（claude / opencode / codex / codebuddy）：",
-					"1. 先用 agent_list 查看已打开（运行中）的智能体（含 id、引擎、状态、工作目录）；agent_open 会在系统终端里开新窗口启动智能体并注入角色/技能简报。",
+					"右侧「智能体雷达」面板管理真实智能体（claude / opencode / codex 走 herdr kind；codebuddy 无 herdr kind，由插件在 herdr 面板里建 pane 并直接输入命令启动，同一套 pane 操作）：",
+					"1. 先用 agent_list 查看已打开（运行中）的智能体（含 id、引擎、状态、工作目录）；agent_open 会启动智能体并自动完成整个新建流程：herdr 建 pane → 输入启动命令 → 监控 pane 输出 → 自动应答启动期确认弹窗（文件夹信任等，该点 yes 时自动点 yes）→ 注入角色/技能简报 → 验证简报在会话文件里落地后才算创建完成。",
 					"2. 会话历史（cc-switch 式）：GET /agent-commander/api/sessions?cwd=<目录> 可列出本工作区四引擎的历史会话（时间/ID/标题/token），POST /sessions/restore 恢复、DELETE /sessions/:engine/:id 删除。",
-					"3. agent_send 派发任务（submit=true 回车；经系统按键注入，需辅助功能权限）；agent_broadcast 并行派发；agent_read 在终端模式下不提供实时输出（系统终端无 pty），结果以会话历史为准。",
-					"4. agent_approve 确认权限提问；agent_signal 发中断（kill）；agent_close 关闭（SIGTERM→SIGKILL）。",
+					"3. agent_send 派发任务（submit=true 回车）；agent_broadcast 并行派发；agent_read 对 herdr 面板返回可见输出（paneRead），结果以会话历史为准。",
+					"4. agent_approve 确认权限提问；agent_signal 发中断（kill）；agent_close 关闭（优雅退出→关 pane）。",
 					"5. 团队共享记忆：项目 .deepseek/ 下 memory.md、task-board.md、experience.md、handoffs/ 与 SQLite 记忆库 memory.db；智能体开工先读、完成后回写。"
 				].join("\n")
 			});
@@ -1568,8 +1721,7 @@ export class AgentCommanderService extends Service {
 		};
 		this.baseCwd = this.cfg.baseCwd;
 		this.memoryDir = this.cfg.memoryDir;
-		// 终端宿主：智能体跑在系统终端窗口里（Terminal/Ghostty/iTerm），
-		// 不在浏览器渲染；会话历史管理见 session-scanner。
+		// 会话历史（cc-switch 式）：四引擎历史会话扫描 / 删除。保留本版实现。
 		this.scanner = new SessionScanner();
 		this.terminalApp = this.cfg.terminalApp;
 		this.terminalLabel = new TerminalLauncher(this.cfg.terminalApp).label;
@@ -1592,20 +1744,54 @@ export class AgentCommanderService extends Service {
 		this.stores = new Map();
 		this.baseStore = new MemoryStore(this.baseCwd, this.memoryDir);
 		this.stores.set(this.baseCwd, this.baseStore);
-		this.registry = new TerminalAgentRegistry({
+		const commonOpts = {
 			maxAgents: this.cfg.maxAgents,
 			transcriptLimit: this.cfg.transcriptLimit,
 			allowedSignals: this.cfg.allowedSignals,
 			memoryDir: this.memoryDir,
 			baseCwd: this.baseCwd,
-			terminalApp: this.cfg.terminalApp,
 			onSpawn: (cwd) => {
 				try {
 					seedSharedMemory(cwd, this.memoryDir);
 				} catch {}
 			}
-		});
-		ctx.logger?.info?.(`[dsh-agent-commander] agent host = 系统终端（${this.terminalLabel}）`);
+		};
+		// 智能体宿主：herdr（tmux pane 接管终端，会话即窗口）优先，不可用回退
+		// 系统终端窗口（Terminal/Ghostty）。agentHost=herdr 强制 herdr，失败报错。
+		// codebuddy 没有 herdr kind → 永远走系统终端宿主（组合注册表按引擎路由）。
+		// （探测为同步 findBinary；server 可用性由 HerdrAgentRegistry 内部自检。）
+		this.agentHost = "terminal-host";
+		this.herdrAdapter = null;
+		this.herdrRegistry = null;
+		// 系统终端宿主总是创建：herdr 模式下专门承接 codebuddy。
+		this.terminalRegistry = new TerminalAgentRegistry({ ...commonOpts, terminalApp: this.cfg.terminalApp });
+		const herdrBinary = HerdrAdapter.findBinary();
+		const wantHerdr = this.cfg.agentHost === "herdr" || (this.cfg.agentHost !== "terminal-host" && herdrBinary !== null);
+		if (wantHerdr && herdrBinary !== null) {
+			this.herdrAdapter = new HerdrAdapter(herdrBinary);
+			this.herdrRegistry = new HerdrAgentRegistry(this.herdrAdapter, {
+				...commonOpts,
+				scanner: this.scanner
+			});
+			this.agentHost = "herdr";
+			this.herdrAdapter.selftest().then((r) => {
+				if (!r.ok) ctx.logger?.warn?.(`[dsh-agent-commander] herdr 自检未通过（${r.reason}），herdr 智能体操作可能失败；codebuddy 仍走系统终端`);
+			}).catch(() => {});
+			this.registry = new CompositeRegistry({
+				herdr: this.herdrRegistry,
+				terminal: this.terminalRegistry,
+				herdrKinds: HERDR_KIND_MAP
+			});
+		} else if (this.cfg.agentHost === "herdr") {
+			throw new Error("agentHost=herdr 但未找到 herdr 二进制（~/.local/bin/herdr 或 PATH）");
+		} else {
+			this.registry = new CompositeRegistry({
+				herdr: null,
+				terminal: this.terminalRegistry,
+				herdrKinds: {}
+			});
+		}
+		ctx.logger?.info?.(`[dsh-agent-commander] agent host = ${this.agentHost}${this.agentHost === "herdr" ? "（tmux pane，会话即窗口）" : `（系统终端 ${this.terminalLabel}）`}`);
 		const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts);
 		const resolveCwd = (sessionId) => sessionCwdOf(ctx, sessionId);
 		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd, this.cfg, this.scanner);
