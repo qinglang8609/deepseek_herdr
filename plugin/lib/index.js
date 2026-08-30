@@ -1077,6 +1077,7 @@ var AgentRegistry = class {
 				if (now >= m.ocVerifyAt) {
 					if (this.opencodeBriefingLanded(handle, m.injectAt - 5000)) {
 						m.reacted = true;
+						this.markBriefingSent(handle);
 					} else if (m.ocAttempts < MONITOR_OPENCODE_MAX_INJECTS && elapsed < MONITOR_TOTAL_CAP_MS) {
 						m.ocAttempts += 1;
 						m.ocVerifyAt = now + MONITOR_OPENCODE_VERIFY_MS;
@@ -1100,6 +1101,7 @@ var AgentRegistry = class {
 					const found = this._latestSessionFile(handle, m.injectAt - 5000);
 					if (found !== null && !this._claimedSessionIds(handle).has(found.id)) handle.sessionCacheId = found.id;
 				}
+				this.markBriefingSent(handle);
 			}
 		}
 		// Enter retry for engines whose text is already sitting on the input line.
@@ -1338,6 +1340,22 @@ var AgentRegistry = class {
 		// Keep .deepseek/agents.json in sync: without this it stays at the
 		// creation-time "pending" snapshot forever even after the briefing was
 		// delivered ("sent") or failed.
+		this.persist();
+	}
+	/**
+	 * Flip the briefing to "sent" the moment delivery is *verified*, not after
+	 * the task goes quiet. Previously the monitor only reported "sent" once the
+	 * first task produced MONITOR_TASK_QUIET_MS of silence or hit the total cap
+	 * (5 min) — an agent that keeps working after accepting the briefing never
+	 * goes quiet, so the radar panel stayed on 「简报注入中…」 the whole time even
+	 * though the briefing had long since landed. This is idempotent: it does not
+	 * touch the monitor phase, so the lifecycle still finishes normally.
+	 */
+	markBriefingSent(handle) {
+		if (handle.briefing === "sent") return; // 幂等
+		handle.briefing = "sent";
+		handle.updatedAt = Date.now();
+		this.notify();
 		this.persist();
 	}
 	meta(handle) {

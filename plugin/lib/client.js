@@ -7308,6 +7308,7 @@ const ICON_PATHS = {
 	"power": [["path", { d: "M12 2v10" }], ["path", { d: "M18.4 6.6a9 9 0 1 1-12.77.04" }]],
 	"rotate-ccw": [["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }], ["path", { d: "M3 3v5h5" }]],
 	"refresh-cw": [["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" }], ["path", { d: "M21 3v5h-5" }], ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" }], ["path", { d: "M8 16H3v5" }]],
+	"trash": [["path", { d: "M3 6h18" }], ["path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" }], ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }], ["path", { d: "M10 11v6" }], ["path", { d: "M14 11v6" }]],
 	"minimize": [["path", { d: "m14 10 7-7" }], ["path", { d: "M20 10h-6V4" }], ["path", { d: "m3 21 7-7" }], ["path", { d: "M4 14h6v6" }]],
 	"folder": [["path", { d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" }]],
 	"clock": [["circle", { cx: 12, cy: 12, r: 10 }], ["path", { d: "M12 6v6l4 2" }]],
@@ -7934,7 +7935,7 @@ function MiniTerminal({ agentId }) {
 		const { Terminal } = require_xterm();
 		const { FitAddon } = require_addon_fit();
 		const term = new Terminal({
-			scrollback: 2000,
+			scrollback: 800,
 			fontSize: 11,
 			fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
 			disableStdin: true,
@@ -7998,6 +7999,19 @@ function MiniTerminal({ agentId }) {
 				}
 			} catch {}
 		};
+		let writeBuffer = "";
+		let flushTimer = null;
+		const flushWrites = () => {
+			flushTimer = null;
+			if (writeBuffer === "") return;
+			const text = writeBuffer;
+			writeBuffer = "";
+			term.write(text, pinToBottom);
+		};
+		const enqueueWrite = (text) => {
+			writeBuffer += text;
+			if (flushTimer === null) flushTimer = setTimeout(flushWrites, 16);
+		};
 		const connect = () => {
 			if (closed) return;
 			ws = new WebSocket(wsUrl(`/agent-commander/ws/terminal?id=${encodeURIComponent(agentId)}`));
@@ -8006,9 +8020,7 @@ function MiniTerminal({ agentId }) {
 				sendResize();
 			};
 			ws.onmessage = (e) => {
-				const write = (text) => {
-					term.write(text, pinToBottom);
-				};
+				const write = (text) => enqueueWrite(text);
 				if (typeof e.data === "string") write(e.data);
 				else e.data.text().then(write).catch(() => {});
 			};
@@ -8030,6 +8042,7 @@ function MiniTerminal({ agentId }) {
 			closed = true;
 			if (reconnectTimer !== null) clearTimeout(reconnectTimer);
 			if (pinTimer !== null) clearTimeout(pinTimer);
+			if (flushTimer !== null) clearTimeout(flushTimer);
 			resizeObserver.disconnect();
 			try {
 				ws?.close();
@@ -8044,7 +8057,7 @@ function MiniTerminal({ agentId }) {
 // ---------------------------------------------------------------------------
 // Agent cards (live mini-terminal per agent)
 // ---------------------------------------------------------------------------
-function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAgent, onRestore, onForget }) {
+function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAgent, onRestore, onForget, onRefresh }) {
 	if (agents.length === 0) {
 		return h("div", { className: "dhac_empty" }, [
 			h("div", null, scoped ? "本文件夹还没有智能体" : "还没有智能体"),
@@ -8098,12 +8111,21 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
-							title: "清空会话历史",
+							title: "刷新会话历史列表",
+							onClick: (e) => {
+								e.stopPropagation();
+								if (typeof onRefresh === "function") onRefresh();
+							}
+						}, h(Icon, { name: "refresh-cw", size: 12 })),
+						h("button", {
+							type: "button",
+							className: "dhac_cardClose",
+							title: "清空会话历史（在智能体中执行 /clear 或 /new，开始新对话）",
 							onClick: (e) => {
 								e.stopPropagation();
 								onNewSession(agent.id);
 							}
-						}, h(Icon, { name: "rotate-ccw", size: 12 })),
+						}, h(Icon, { name: "trash", size: 12 })),
 						h("button", {
 							type: "button",
 							className: "dhac_cardClose",
@@ -8123,8 +8145,6 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 				h(Icon, { name: agent.briefing === "pending" ? "clock" : "alert", size: 11, className: "dhac_inlineIcon" }),
 				agent.briefing === "pending" ? "简报注入中（等待启动就绪后自动回车执行）…" : "简报未能确认执行，请打开终端检查"
 			]),
-			h("div", { className: "dhac_agentMeta", title: `${agent.cwd} · 会话 ${agent.sessionName ?? agent.sessionId ?? "-"}` },
-				`#${agent.pid ?? "?"}${agent.sessionName ? ` · ${agent.sessionName}` : ""}${agent.workspaceId ? ` · ws:${agent.workspaceId}` : ""}${agent.restored ? " · 已恢复" : ""}`),
 			ghost
 				? h("div", { className: "dhac_cardExited" }, [
 					"未运行（恢复失败或已关闭）— ",
@@ -8232,7 +8252,7 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "重新启动该智能体（恢复会话）", onClick: () => onRestore(agent.id) }, h(Icon, { name: "power", size: 13 })),
 			ghost && h("button", { type: "button", className: "dhac_iconButton", title: "删除该保存记录（从 .deepseek/agents.json 移除）", onClick: () => { onForget(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 })),
 			!ghost && COMPACT_SUPPORTED.has(agent.type) && h("button", { type: "button", className: "dhac_iconButton", title: "压缩会话（减少上下文）", onClick: () => onCompact(agent.id) }, h(Icon, { name: "minimize", size: 13 })),
-			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "rotate-ccw", size: 13 })),
+			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "清空会话历史（在智能体中执行 /clear 或 /new，开始新对话）", onClick: () => onNewSession(agent.id) }, h(Icon, { name: "trash", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "中断 (Ctrl+C)", onClick: () => signalRef.current?.("SIGINT") }, h(Icon, { name: "stop", size: 13 })),
 			!ghost && h("button", { type: "button", className: "dhac_iconButton", title: "关闭智能体", onClick: () => { onCloseAgent(agent.id); onBack(); } }, h(Icon, { name: "x", size: 13 }))
 		]),
@@ -8506,7 +8526,7 @@ function RadarPanel(props) {
 			detail !== void 0
 				? h(TerminalDetail, { agent: detail, onBack: () => setDetailId(null), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent, onRestore: restoreSaved, onForget: forgetSaved })
 				: h("div", { className: "dhac_stack" }, [
-					h(AgentCards, { agents: merged, scoped: workspaceCwd !== void 0, onOpen: (agent) => setDetailId(agent.id), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent, onRestore: restoreSaved, onForget: forgetSaved }),
+					h(AgentCards, { agents: merged, scoped: workspaceCwd !== void 0, onOpen: (agent) => setDetailId(agent.id), onCompact: compactSession, onNewSession: newSession, onCloseAgent: closeAgent, onRestore: restoreSaved, onForget: forgetSaved, onRefresh: () => refreshSessions(workspaceCwd) }),
 					h(SessionsSection, { sessions, loading: sessionsLoading, onRestore: restoreSession, onDelete: deleteSession, onLiveClose: closeLiveSession, onRefresh: () => refreshSessions(workspaceCwd) })
 				])),
 		dialogOpen &&
