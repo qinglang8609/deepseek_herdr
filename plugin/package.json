@@ -1,6 +1,6 @@
 {
   "name": "dsh-agent-commander",
-  "version": "0.2.2",
+  "version": "0.4.0",
   "description": "DSH web plugin: multi-agent commander. Open Claude / opencode / codex agents with role & skill definitions, watch every agent's live terminal in a right-side radar panel, and let DeepSeek dispatch tasks through agent_* tools. Shared memory: 记忆库.md / 任务看板.md / 交接区 in the project directory.",
   "type": "module",
   "main": "lib/index.js",
