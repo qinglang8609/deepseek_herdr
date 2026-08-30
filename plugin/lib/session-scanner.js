@@ -8,7 +8,7 @@
 //   codebuddy ~/.codebuddy/projects/<cwd-slug>/*.jsonl    （与 claude 同构，待验证）
 //
 // 返回统一结构：{ engine, id, title, time, tokens, cost, cwd }
-// 恢复（restore）由 terminal-registry.restoreSession 负责；本模块只做扫描+删除。
+// 恢复（restore）由 index.js 的 AgentRegistry.restoreSession 负责；本模块只做扫描+删除。
 // 为避免大 jsonl 反复全量读：按 (mtime,size) 缓存统计结果。
 // ============================================================================
 

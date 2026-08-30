@@ -19,18 +19,15 @@
 // ============================================================================
 
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { existsSync, chmodSync, readdirSync, writeFileSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { dirname, join, isAbsolute, resolve, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { TerminalAgentRegistry, ENGINE_TYPES } from "./terminal-registry.js";
 import { SessionScanner } from "./session-scanner.js";
-import { TerminalLauncher } from "./terminal-launcher.js";
-import { HerdrAdapter } from "./herdr-adapter.js";
-import { HerdrAgentRegistry, HERDR_KIND_MAP } from "./herdr-registry.js";
-import { CompositeRegistry } from "./composite-registry.js";
+import { SessionMonitor, buildSessionList, MONITOR_INTERVAL_MS } from "./session-monitor.js";
 
 const require = createRequire(import.meta.url);
 
@@ -67,12 +64,6 @@ const fallbackRequire = (() => {
 		throw lastError ?? new Error(`cannot resolve "${spec}" from any module anchor`);
 	};
 })();
-/** Lazy `ws` — resolved through the anchor chain so terminal WebSockets work no matter how the plugin was installed. */
-let wsModule = null;
-function getWs() {
-	if (wsModule === null) wsModule = fallbackRequire("ws");
-	return wsModule;
-}
 // ---------------------------------------------------------------------------
 // Harness runtime packages — @deepseek-ai/dsh-tools, @deepseek-ai/cordis and
 // @deepseek-ai/schemastery are ESM-only and are NOT part of this plugin's own
@@ -102,9 +93,17 @@ function resolveFromAnchors(spec) {
 const { defineTool } = await import(pathToFileURL(resolveFromAnchors("@deepseek-ai/dsh-tools")).href);
 const { Service } = await import(pathToFileURL(resolveFromAnchors("@deepseek-ai/cordis")).href);
 const { default: Schema } = await import(pathToFileURL(resolveFromAnchors("@deepseek-ai/schemastery")).href);
+/** Lazy `ws` — resolved through the anchor chain so terminal WebSockets work no matter how the plugin was installed. */
+let wsModule = null;
+function getWs() {
+	if (wsModule === null) wsModule = fallbackRequire("ws");
+	return wsModule;
+}
 
 const API_PREFIX = "/agent-commander/api";
+const WS_TERMINAL = "/agent-commander/ws/terminal";
 const WS_LIST = "/agent-commander/ws/list";
+const WS_SESSIONS = "/agent-commander/ws/sessions";
 const TRANSCRIPT_LIMIT = 1 << 20; // 1 MiB per agent transcript ring
 const MAX_AGENTS_DEFAULT = 8;
 const BODY_LIMIT = 1 << 20; // 1 MiB request body cap
@@ -149,9 +148,12 @@ const STATUS_ACTIVE_RE = /[⠀-⣿]|Thinking|Forming|Brewing|Wrangling|Boogie|wo
 // is the safe choice, e.g. claude's folder trust); `y` answers y + Enter.
 // Matched against the whitespace-stripped transcript tail.
 const MONITOR_QUESTION_PATTERNS = [
-	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck|Doyoutrustthefilesinthisfolder/, enter: true },
-	{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, y: true },
-	{ re: /PressEnterto|Entertoselect|Selectanoption/, enter: true }
+	// auto：无害启动提示（目录信任 / 安全检查 / 菜单回车）→ 自动答，不打扰用户。
+	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck|Doyoutrustthefilesinthisfolder/, enter: true, kind: "auto" },
+	// critical：真正的 y/n 权限门 → 不自动点，置 pendingApproval 上报用户决定。
+	{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, y: true, kind: "critical" },
+	// auto：菜单/回车类 → 自动答。
+	{ re: /PressEnterto|Entertoselect|Selectanoption/, enter: true, kind: "auto" }
 ];
 /**
 * Graceful-exit command per engine (research: claude/codebuddy/qwen use /exit;
@@ -189,6 +191,15 @@ const COMPACT_SESSION_COMMANDS = {
 	claude: "/compact",
 	codebuddy: "/compact",
 	qwen: "/compact"
+};
+/** Resume a saved session per engine: returns the CLI args array given a session id. */
+const RESUME_COMMANDS = {
+	claude: () => [],
+	codebuddy: (id) => ["--resume", String(id)],
+	qwen: (id) => ["--resume", String(id)],
+	opencode: (id) => ["-s", String(id)],
+	codex: (id) => ["resume", String(id)],
+	pi: (id) => ["--resume", String(id)]
 };
 /** Plugin data dir for the global workspace index (survives restarts, independent of any project). */
 function dshDataDir() {
@@ -273,6 +284,18 @@ function isTrustedAuthority(hostUrl, trustedHosts) {
 		return canonicalAuthority(entry, entryUrl) === entryUrl.hostname ? entryUrl.hostname === hostUrl.hostname : entryUrl.host === hostUrl.host;
 	});
 }
+
+/** PID 是否真实存活（用于「运行中」判定：残留 handle 不会误标）。 */
+function isPidAlive(pid) {
+	if (!Number.isInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error?.code === "EPERM";
+	}
+}
+
 function isTrustedApiRequest(request, trustedHosts) {
 	const host = header(request.headers, "host");
 	if (host === void 0) return false;
@@ -292,24 +315,65 @@ function isTrustedApiRequest(request, trustedHosts) {
 // ---------------------------------------------------------------------------
 // node-pty lazy load + spawn-helper fix (same discipline as dsh-better-sidebar)
 // ---------------------------------------------------------------------------
-/** 二进制搜索目录：PATH + 常见安装位置 + nvm 版本目录（codebuddy 常装在 nvm 下）。 */
-function searchPathDirs() {
-	const dirs = [];
-	for (const dir of (process.env.PATH ?? "").split(":").filter(Boolean)) {
-		if (dir !== "") dirs.push(dir);
-	}
-	dirs.push(
-		join(homedir(), ".local", "bin"),
-		join(homedir(), ".opencode", "bin"),
-		"/opt/homebrew/bin",
-		"/usr/local/bin"
-	);
+function loadNodePty() {
 	try {
-		const nvmRoot = join(homedir(), ".nvm", "versions", "node");
-		for (const version of readdirSync(nvmRoot)) {
-			dirs.push(join(nvmRoot, version, "bin"));
+		return require("node-pty");
+	} catch (error) {
+		try {
+			// Installed as link/tarball/git — the plugin's own node_modules may be
+			// absent; fall back to the Harness profile module mirror.
+			return fallbackRequire("node-pty");
+		} catch {
+			console.warn("[dsh-agent-commander] node-pty failed to load:", error?.message ?? error);
+			return null;
+		}
+	}
+}
+function ensureSpawnHelper() {
+	if (process.platform === "win32") return;
+	try {
+		const entry = require.resolve("node-pty");
+		const packageRoot = dirname(dirname(entry));
+		const candidates = [];
+		const prebuilds = join(packageRoot, "prebuilds");
+		try {
+			for (const dir of readdirSync(prebuilds)) candidates.push(join(prebuilds, dir, "spawn-helper"));
+		} catch {}
+		candidates.push(join(packageRoot, "build", "Release", "spawn-helper"));
+		for (const helper of candidates) if (existsSync(helper)) chmodSync(helper, 0o755);
+	} catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Binary resolution for agent CLIs
+// ---------------------------------------------------------------------------
+function nvmNodeBins() {
+	// nvm-managed Node global bins: codebuddy/cbc are typically installed via
+	// `npm i -g @tencent-ai/codebuddy-code`, which puts them in
+	// ~/.nvm/versions/node/<version>/bin. The desktop host runs with a stripped
+	// PATH so those dirs are only reachable through an explicit glob.
+	const bins = [];
+	try {
+		const root = join(homedir(), ".nvm", "versions", "node");
+		for (const entry of readdirSync(root, { withFileTypes: true })) {
+			if (!entry.isDirectory()) continue;
+			const bin = join(root, entry.name, "bin");
+			if (existsSync(bin)) bins.push(bin);
 		}
 	} catch {}
+	return bins;
+}
+function searchPathDirs() {
+	const dirs = [];
+	const pathEntries = (process.env.PATH ?? "").split(":");
+	for (const dir of pathEntries) if (dir !== "" && !dirs.includes(dir)) dirs.push(dir);
+	// Common agent CLI install dirs beyond PATH: ~/.local/bin (claude/codex),
+	// ~/.opencode/bin (opencode), homebrew, /usr/local.
+	for (const extra of [join(homedir(), ".local", "bin"), join(homedir(), ".opencode", "bin"), join(homedir(), ".claude", "local"), join(homedir(), ".codebuddy", "bin"), join(homedir(), ".pi", "bin"), join(homedir(), ".qwen", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]) if (!dirs.includes(extra)) dirs.push(extra);
+	// nvm node bins (codebuddy/cbc) — see nvmNodeBins().
+	for (const nodeBin of nvmNodeBins()) if (!dirs.includes(nodeBin)) dirs.push(nodeBin);
+	// Tencent WorkBuddy desktop bundle ships a `codebuddy` CLI at this path.
+	for (const extra of ["/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin"]) if (!dirs.includes(extra)) dirs.push(extra);
 	return dirs;
 }
 function resolveBinary(type) {
@@ -405,18 +469,8 @@ export const Config = Schema.object({
 	baseCwd: Schema.string().default(""),
 	/** Shared-memory directory name placed under each project root. */
 	memoryDir: Schema.string().default(MEMORY_DIR),
-	/**
-	 * 系统终端软件：auto（有 Ghostty 用 Ghostty，否则 Terminal.app）|
-	 * terminal（Terminal.app）| ghostty | iterm2。智能体跑在系统终端窗口里，
-	 * 不在浏览器渲染终端；会话历史管理见 docs/terminal-host-dev.md。
-	 */
-	terminalApp: Schema.union(["auto", "terminal", "ghostty", "iterm2"]).default("auto"),
-	/**
-	 * 智能体宿主：herdr（tmux pane 接管终端，会话即窗口，agent.conf 实时登记
-	 * paneId/type/会话缓存ID）| terminal-host（系统终端窗口）| auto（优先 herdr，
-	 * 不可用回退 terminal-host）。
-	 */
-	agentHost: Schema.union(["auto", "herdr", "terminal-host"]).default("auto")
+	/** 会话历史定时巡检间隔（毫秒）。0 = 关闭定时巡检，仅靠订阅首帧 + 手动刷新。 */
+	monitorIntervalMs: Schema.natural().default(MONITOR_INTERVAL_MS)
 });
 
 const MEMORY_FILES = {
@@ -818,6 +872,1277 @@ function deriveStatus(transcript, current) {
 // ---------------------------------------------------------------------------
 // Agent registry
 // ---------------------------------------------------------------------------
+var AgentRegistry = class {
+	constructor(nodePty, maxAgents, baseCwd, onSpawn, projectRootOf, opts = {}) {
+		this.nodePty = nodePty;
+		this.maxAgents = maxAgents;
+		this.baseCwd = baseCwd ?? process.cwd();
+		this.onSpawn = typeof onSpawn === "function" ? onSpawn : null;
+		this.projectRootOf = typeof projectRootOf === "function" ? projectRootOf : null;
+		// Configurable limits (config → apply → constructor).
+		this.transcriptLimit = Number.isFinite(opts.transcriptLimit) && opts.transcriptLimit > 0 ? opts.transcriptLimit : TRANSCRIPT_LIMIT;
+		this.allowedSignals = Array.isArray(opts.allowedSignals) && opts.allowedSignals.length > 0 ? opts.allowedSignals : [...ALLOWED_SIGNALS];
+		this.memoryDir = typeof opts.memoryDir === "string" && opts.memoryDir !== "" ? opts.memoryDir : MEMORY_DIR;
+		this.agents = new Map();
+		this.listeners = new Set();
+		this.statusTimer = null;
+		this.statusSweepTimer = setInterval(() => this.statusSweep(), 5000);
+		// True while restoreState/scanCwd are re-spawning saved agents: persist()
+		// must NOT delete the agents.json of a root it hasn't finished restoring
+		// yet (the file is the only record of those agents).
+		this.restoring = false;
+		// True during app teardown: the first persist() in shutdown() already
+		// wrote the live config, so the exit events fired by killing the PTYs
+		// must not make persist() delete that just-written config.
+		this.shuttingDown = false;
+	}
+	/** Debounced notify: status flips (idle↔working) are coalesced to one push per 1.5s. */
+	scheduleStatusNotify() {
+		if (this.statusTimer !== null) return;
+		this.statusTimer = setTimeout(() => {
+			this.statusTimer = null;
+			this.notify();
+		}, 1500);
+	}
+	/**
+	 * Periodic sweep: re-evaluate agents stuck at "working" that have not
+	 * produced output for STATUS_IDLE_AFTER_MS. The Braille spinner and
+	 * thinking-verb check (STATUS_ACTIVE_RE) covers opencode, claude, and
+	 * future engines — if the last 4000 bytes of transcript contain no active
+	 * indicator and enough time has passed, the agent is demoted to "idle".
+	 */
+	statusSweep() {
+		const now = Date.now();
+		for (const handle of this.agents.values()) {
+			if (handle.status !== "working" || handle.exited) continue;
+			const lastAt = handle.lastOutputAt ?? handle.updatedAt ?? 0;
+			if (now - lastAt < STATUS_IDLE_AFTER_MS) continue;
+			const tail = stripAnsi(handle.transcript.slice(-4000));
+			if (STATUS_ACTIVE_RE.test(tail)) continue;
+			handle.status = "idle";
+			this.scheduleStatusNotify();
+		}
+	}
+	create({ type, name, role, skills, cwd, cols, rows, id, sessionId, sessionName, workspaceId, restored }) {
+		if (this.agents.size >= this.maxAgents) throw new Error(`agent limit reached (${this.maxAgents})`);
+		if (!AGENT_TYPES.includes(type)) throw new Error(`unknown agent type "${type}" — allowed: ${AGENT_TYPES.join(", ")}`);
+		const binary = resolveBinary(type);
+		if (binary === null) throw new Error(`agent type "${type}" is not installed`);
+		const targetCwd = validateCwd(cwd, this.baseCwd);
+		seedSharedMemory(targetCwd, this.memoryDir);
+		if (this.onSpawn !== null) {
+			try {
+				this.onSpawn(targetCwd);
+			} catch {}
+		}
+		const agentId = typeof id === "string" && id !== "" ? id : randomUUID().slice(0, 8);
+		const trimmedRole = (role ?? "").trim();
+		const skillList = Array.isArray(skills) ? skills.filter((s) => typeof s === "string") : [];
+		const handle = {
+			id: agentId,
+			type,
+			name: (name ?? type).trim() || type,
+			role: trimmedRole,
+			skills: skillList,
+			cwd: targetCwd,
+			sessionId: typeof sessionId === "string" ? sessionId : "",
+			// 引擎会话缓存 ID（claude jsonl / codex rollout / opencode db 的会话 id）。
+			// 与上面的 sessionId（创建时所在的 DSH 会话 id，供 projectRootOf 定位项目根）
+			// 语义不同：runningSessions ↔ buildSessionList 的「运行中」绑定只用这个。
+			// 新建时未知（引擎在首条消息后才落盘会话文件），由 _discoverSessionId 补齐。
+			sessionCacheId: void 0,
+			sessionName: typeof sessionName === "string" ? sessionName : "",
+			workspaceId: typeof workspaceId === "string" ? workspaceId : "",
+			restored: restored === true,
+			pid: 0,
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			lastOutputAt: Date.now(),
+			// 简报恒注入（用户反馈：空角色新建后什么都没注入，agent 没有团队上下文）。
+			// 角色为空时 briefingText 落到团队协议兜底文案；恢复的已保存智能体同样
+			// 注入 —— 重启后它开的是全新对话，正需要这段简报找回角色。
+			briefing: "pending",
+			exited: false,
+			exitCode: null,
+			status: "idle",
+			transcript: "",
+			pendingApproval: void 0,
+			pty: this.nodePty.spawn(binary, [], {
+				name: "xterm-256color",
+				cols: Math.max(2, Math.floor(cols ?? 80)),
+				rows: Math.max(2, Math.floor(rows ?? 24)),
+				cwd: targetCwd,
+				env: this.agentEnv(targetCwd)
+			})
+		};
+		handle.pid = handle.pty.pid;
+		handle.pty.onData((data) => {
+			handle.transcript += data;
+			if (handle.transcript.length > this.transcriptLimit) handle.transcript = handle.transcript.slice(handle.transcript.length - this.transcriptLimit);
+			handle.updatedAt = Date.now();
+			handle.lastOutputAt = Date.now();
+			const next = deriveStatus(handle.transcript, handle.status);
+			if (next !== handle.status) {
+				handle.status = next;
+				this.scheduleStatusNotify();
+			}
+		});
+		handle.pty.onExit(({ exitCode }) => {
+			clearTimeout(handle._monitorTimer);
+			handle.exited = true;
+			handle.exitCode = exitCode;
+			handle.status = "exited";
+			handle.updatedAt = Date.now();
+			this.notify();
+			this.persist();
+		});
+		this.agents.set(agentId, handle);
+		// Startup monitor: watch boot, auto-answer prompts (folder trust, y/n),
+		// inject the briefing and submit it with Enter once the CLI has formally
+		// entered its UI, and keep answering until the first task completes.
+		this.startMonitor(handle, handle.briefing === "pending");
+		this.notify();
+		this.persist();
+		return handle;
+	}
+	/** Minimal env for spawned agents — whitelist only; never leak harness secrets (fixes MEDIUM env leak). */
+	agentEnv(cwd) {
+		const env = { PATH: enhancedPath(), TERM: "xterm-256color", PWD: cwd };
+		for (const key of AGENT_ENV_KEYS) {
+			const value = process.env[key];
+			if (typeof value === "string") env[key] = value;
+		}
+		return env;
+	}
+	/**
+	 * Start the lifecycle monitor for a freshly spawned agent. `inject` is true
+	 * when a role/skill briefing must be delivered as the agent's first task
+	 * (false for restored agents — their saved conversation already contains it,
+	 * but the monitor still auto-answers any boot prompts such as login).
+	 */
+	startMonitor(handle, inject) {
+		const m = handle._monitor = {
+			phase: "boot",          // boot → inject → verify → done; "exit" on close
+			startedAt: Date.now(),
+			inject: inject === true,
+			injected: false,
+			injectAt: 0,
+			enterDue: 0,
+			enters: 0,
+			rewrites: 0,            // full-briefing rewrites after swallowed text
+			baseline: 0,            // transcript length at the last Enter press
+			reacted: false,         // saw the agent actually react to the briefing
+			answered: []            // [{ sig, at }] — prompts already answered
+		};
+		if (inject) handle.briefing = "pending";
+		handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
+	}
+	/**
+	 * One monitor tick: auto-answer prompts, inject + submit the briefing once
+	 * the CLI has formally entered its UI, retry Enter until the agent reacts,
+	 * and finish after the first task completes (activity, then output quiet).
+	 */
+	monitorTick(handle) {
+		const m = handle._monitor;
+		if (handle.exited || m === void 0 || m.phase === "done" || m.phase === "exit") return;
+		const now = Date.now();
+		const elapsed = now - m.startedAt;
+		const clean = stripAnsi(handle.transcript.slice(-4000));
+		const norm = clean.replace(/\s+/g, "");
+
+		// 1) Auto-answer interactive prompts (boot questions + first-task prompts).
+		this.answerPrompts(handle, clean, norm, now);
+
+		// 2) Inject the briefing once the CLI is ready (or at the boot cap).
+		if (!m.injected && m.inject && m.phase === "boot") {
+			// opencode boots slowly (spawning MCP servers, loading plugins) and
+			// swallows input written before it settles — so its cap is much
+			// longer and only a backstop; delivery is verified below.
+			const cap = handle.type === "opencode" ? MONITOR_OPENCODE_CAP_MS : MONITOR_CAP_MS;
+			if (this.cliReady(handle, clean, norm, elapsed) || elapsed >= cap) {
+				this.injectBriefing(handle, m);
+			}
+		}
+
+		// 3) Delivery + verification loop.
+		if (m.injected && !m.reacted) {
+			if (handle.type === "opencode") {
+				// opencode's TUI does NOT echo accepted input to the PTY output
+				// stream, so transcript growth can't prove delivery — and it
+				// swallows text written mid-boot (MCP/plugin loading). Verify
+				// against opencode's OWN session db that the briefing landed as
+				// a user message; if not, re-write the full text + Enter (a bare
+				// Enter would submit an empty line) and keep polling until
+				// confirmed, attempts exhausted, or the total cap.
+				if (now >= m.ocVerifyAt) {
+					if (this.opencodeBriefingLanded(handle, m.injectAt - 5000)) {
+						m.reacted = true;
+					} else if (m.ocAttempts < MONITOR_OPENCODE_MAX_INJECTS && elapsed < MONITOR_TOTAL_CAP_MS) {
+						m.ocAttempts += 1;
+						m.ocVerifyAt = now + MONITOR_OPENCODE_VERIFY_MS;
+						this.writeBriefing(handle, m);
+					} else {
+						// keep verifying (a late landing still counts) — no more writes
+						m.ocVerifyAt = now + MONITOR_OPENCODE_VERIFY_MS;
+					}
+				}
+			} else if (m.enters > 0 && (handle.transcript.length > m.baseline + 512 || this._briefingLandedInFile(handle, m.injectAt - 5000))) {
+				// Reacted = the CLI produced new output after Enter (an accepted
+				// submit redraws/clears the input line and starts the task; a
+				// swallowed Enter leaves the transcript untouched) — OR the
+				// briefing is verifiably a user message in the engine's own
+				// session file (claude/codebuddy jsonl, codex rollout). The file
+				// check is authoritative: it also proves the conversation exists,
+				// so the session-history card can appear and be bound to this
+				// window (会话历史 ↔ 窗口绑定).
+				m.reacted = true;
+				if (!handle.sessionCacheId) {
+					const found = this._latestSessionFile(handle, m.injectAt - 5000);
+					if (found !== null && !this._claimedSessionIds(handle).has(found.id)) handle.sessionCacheId = found.id;
+				}
+			}
+		}
+		// Enter retry for engines whose text is already sitting on the input line.
+		// Enters exhausted without a verified landing → the text was likely
+		// swallowed mid-boot: rewrite the FULL briefing and restart the Enter
+		// cycle (same discipline as the opencode verify loop), bounded.
+		if (handle.type !== "opencode" && m.injected && !m.reacted && now >= m.enterDue) {
+			if (m.enters < MONITOR_MAX_ENTERS) {
+				this.pressEnter(handle, m);
+			} else if ((m.rewrites ?? 0) < 2 && elapsed < MONITOR_TOTAL_CAP_MS) {
+				m.rewrites = (m.rewrites ?? 0) + 1;
+				m.enters = 0;
+				try {
+					handle.pty.write(this.briefingText(handle));
+				} catch {}
+				m.enterDue = Date.now() + MONITOR_ENTER_DELAY;
+			}
+		}
+
+		// 4) First task done = reaction seen, then output quiet for a while.
+		if (m.injected && m.reacted && m.phase === "boot") {
+			const quietMs = Date.now() - (handle.lastOutputAt ?? now);
+			// 关键 yes/no 待确认：不推进到任务态，继续轮询等用户决定。
+			if (handle.pendingApproval !== void 0) {
+				handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
+				return;
+			}
+			if (quietMs >= MONITOR_TASK_QUIET_MS || elapsed >= MONITOR_TOTAL_CAP_MS) {
+				this.finishMonitor(handle, m, m.reacted ? "sent" : "failed");
+				return;
+			}
+		}
+
+		// 5) Hard caps: restored / no-briefing agents only need the boot window.
+		const cap = m.inject ? MONITOR_TOTAL_CAP_MS : MONITOR_CAP_MS;
+		if (elapsed >= cap) {
+			// 待确认时不受总时限约束，等用户回应后再收尾；避免用户还没点就被收走。
+			if (handle.pendingApproval !== void 0) {
+				handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
+				return;
+			}
+			const state = m.inject ? (m.injected ? (m.reacted ? "sent" : "failed") : "failed") : "none";
+			this.finishMonitor(handle, m, state);
+			return;
+		}
+
+		handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
+	}
+	/**
+	 * Auto-answer one interactive prompt per tick. Signatures prevent answering
+	 * the same persistent on-screen question twice within MONITOR_ANSWER_REPEAT_MS.
+	 */
+	answerPrompts(handle, clean, norm, now) {
+		// Only auto-answer during the boot phase to limit prompt injection surface.
+		// Once the monitor transitions to task phase, the agent handles its own prompts.
+		const m = handle._monitor;
+		if (m.phase !== "boot") return;
+		for (const pattern of MONITOR_QUESTION_PATTERNS) {
+			const match = pattern.re.exec(norm);
+			if (match === null) continue;
+			const sig = `${pattern.re.source}:${String(match[0] ?? "").slice(0, 40)}`;
+			// Menus (Enter-confirm) are one-shot — the prompt text stays in the
+			// accumulated transcript, so only skip re-answering y/n prompts
+			// within the repeat window; a NEW y/n prompt of the same kind (e.g.
+			// several "Do you want to proceed?" permission gates) is re-answered.
+			const last = m.answered.find((a) => a.sig === sig);
+			if (last !== void 0 && (pattern.enter === true || now - last.at < MONITOR_ANSWER_REPEAT_MS)) continue;
+			// critical：真正的 y/n 权限门 → 不自动点，挂起为「待确认」上报用户决定。
+			if (pattern.kind === "critical") {
+				if (handle.pendingApproval === void 0) {
+					handle.pendingApproval = {
+						sig,
+						prompt: String(match[0] ?? "").slice(0, 80) || "是否继续？",
+						engine: handle.type,
+						agentId: handle.id,
+						at: now,
+						answered: false
+					};
+					this.notify();
+				}
+				handle.lastOutputAt = Date.now();
+				return; // 等待用户决定，不自动答
+			}
+			m.answered.push({ sig, at: pattern.enter === true ? Infinity : now });
+			if (m.answered.length > 40) m.answered.shift();
+			try {
+				if (pattern.enter === true) {
+					handle.pty.write("\r");
+				} else {
+					// y + Enter (two-phase, same discipline as send/submit).
+					handle.pty.write("y");
+					setTimeout(() => {
+						try {
+							handle.pty.write("\r");
+						} catch {}
+					}, 200);
+				}
+			} catch {}
+			// The answer will produce output; never inject right on top of it.
+			handle.lastOutputAt = Date.now();
+			return; // one answer per tick — re-evaluate next poll
+		}
+	}
+	/**
+	 * Is the CLI formally ready to accept the briefing? Quiet after a boot grace
+	 * is the generic signal (TUIs only go quiet once they settle at the prompt);
+	 * per-engine markers catch CLIs whose footer keeps animating.
+	 */
+	cliReady(handle, clean, norm, elapsed) {
+		if (elapsed < MONITOR_BOOT_GRACE) return false;
+		// opencode: require its prompt marker. The TUI repaints continuously
+		// while restoring a session, so "quiet" alone is NOT a readiness signal —
+		// injecting during that window gets swallowed and the briefing is lost.
+		if (handle.type === "opencode") return /Askanything|escinterrupt|tabagents|ctrl\+p/.test(norm);
+		const quiet = Date.now() - (handle.lastOutputAt ?? Date.now()) >= MONITOR_QUIET_MS;
+		if (quiet) return true;
+		// Note: `norm` has all whitespace stripped, so markers must be too.
+		if (handle.type === "claude" && /\?forshortcuts|←foragents|❯Try|Welcomeback/.test(norm)) return true;
+		return false;
+	}
+	/**
+	 * Write the role/skill briefing as the agent's first task. opencode's input
+	 * box is single-line — the TUI drops embedded newlines, so join with spaces
+	 * there; other engines accept multi-line input. The Enter submit happens in
+	 * monitorTick (two-phase: text now, Enter at MONITOR_ENTER_DELAY).
+	 */
+	briefingText(handle) {
+		const lines = [
+			`[dsh-agent-commander] 你已被总指挥以「${handle.name}」的身份启动（引擎：${handle.type}）。`,
+			`职责定义：${handle.role !== "" ? handle.role : "（本次未指定具体职责：请先读取团队记忆了解上下文，然后待命等待总指挥派活。）"}`,
+			"团队协作协议（必须遵守）：",
+			"1. 先读取工作目录 .deepseek/ 下的 memory.md、task-board.md、experience.md 和 MEMORY.md，了解团队上下文、进行中的任务、历史经验与 SQLite 记忆层用法。",
+			"2. 完成任务后，在 .deepseek/task-board.md 和 SQLite 的 tasks 表中把对应任务状态更新为 ✅/❌ 并写明结果。",
+			"3. 重要产出写入 .deepseek/handoffs/（文件名建议 .deepseek/handoffs/<你的名字>-<主题>.md），并在 handoffs 表登记。",
+			"4. 工作结束后，在 .deepseek/experience.md 和 SQLite memory 表（namespace='experience'）中沉淀经验：结果、经验教训、踩坑记录、可复用的模式。",
+			"5. 向总指挥（DeepSeek）汇报：做了什么、结果如何、下一步建议。"
+		];
+		for (const skill of handle.skills) lines.push(`请先阅读并遵循技能文件：${skill}`);
+		return handle.type === "opencode" ? lines.join(" ") : lines.join("\n");
+	}
+	injectBriefing(handle, m) {
+		if (handle.exited) return;
+		m.injected = true;
+		m.injectAt = Date.now();
+		m.enters = 0;
+		m.reacted = false;
+		m.enterDue = m.injectAt + MONITOR_ENTER_DELAY;
+		if (handle.type === "opencode") {
+			m.ocAttempts = 0;
+			m.ocVerifyAt = m.injectAt + MONITOR_OPENCODE_VERIFY_MS;
+			this.writeBriefing(handle, m);
+		} else {
+			try {
+				handle.pty.write(this.briefingText(handle));
+			} catch {}
+		}
+	}
+	/**
+	 * opencode: write the briefing text and submit it with Enter after the
+	 * usual delay. Used for both the initial inject and every verification
+	 * retry — opencode swallows text written mid-boot, so retrying the full
+	 * text (not just Enter) is what eventually lands it.
+	 */
+	writeBriefing(handle, m) {
+		try {
+			handle.pty.write(this.briefingText(handle));
+		} catch {}
+		m.baseline = handle.transcript.length;
+		setTimeout(() => {
+			try {
+				handle.pty.write("\r");
+			} catch {}
+		}, MONITOR_ENTER_DELAY);
+	}
+	/** Path to opencode's global session db (null when opencode hasn't run yet). */
+	opencodeDbPath() {
+		try {
+			const p = join(homedir(), ".local", "share", "opencode", "opencode.db");
+			return existsSync(p) ? p : null;
+		} catch {
+			return null;
+		}
+	}
+	/**
+	 * Did the briefing text land as a user message in opencode's session db?
+	 * Looks for a part containing the briefing marker in any session rooted at
+	 * the agent's cwd, created after the injection moment. Read-only; the
+	 * caller throttles calls to this (once per MONITOR_OPENCODE_VERIFY_MS).
+	 */
+	opencodeBriefingLanded(handle, sinceMs) {
+		try {
+			const dbPath = this.opencodeDbPath();
+			if (dbPath === null) return false;
+			const sqlite = loadSqlite();
+			if (sqlite === null) return false;
+			// Plain open (SELECTs only): avoids `readOnly` which older Node's
+			// node:sqlite doesn't support, and a shared read connection is safe
+			// against opencode's own WAL connection.
+			const db = new sqlite.DatabaseSync(dbPath);
+			try {
+				const row = db.prepare(
+					`SELECT 1 AS hit FROM session s
+					 WHERE s.directory = ?
+					   AND EXISTS (
+					     SELECT 1 FROM part p
+					     WHERE p.session_id = s.id
+					       AND p.time_created >= ?
+					       AND p.data LIKE '%你已被总指挥以「%'
+					   )
+					 LIMIT 1`
+				).get(resolve(handle.cwd), sinceMs);
+				return row !== undefined;
+			} finally {
+				db.close();
+			}
+		} catch {
+			return false;
+		}
+	}
+	/** Press Enter on the agent's terminal (submits whatever is on the input line). */
+	pressEnter(handle, m) {
+		if (handle.exited) return;
+		m.enters += 1;
+		m.baseline = handle.transcript.length;
+		m.enterDue = Date.now() + MONITOR_ENTER_RETRY_MS;
+		try {
+			handle.pty.write("\r");
+		} catch {}
+	}
+	/** End the monitor; `briefing` state is reported to the radar panel. */
+	finishMonitor(handle, m, state) {
+		m.phase = "done";
+		handle.briefing = state;
+		handle.updatedAt = Date.now();
+		this.notify();
+		// Keep .deepseek/agents.json in sync: without this it stays at the
+		// creation-time "pending" snapshot forever even after the briefing was
+		// delivered ("sent") or failed.
+		this.persist();
+	}
+	meta(handle) {
+		return {
+			id: handle.id,
+			type: handle.type,
+			name: handle.name,
+			role: handle.role,
+			skills: handle.skills,
+			cwd: handle.cwd,
+			status: handle.status,
+			exited: handle.exited,
+			exitCode: handle.exitCode,
+			pid: handle.pid,
+			sessionId: handle.sessionId,
+			sessionCacheId: handle.sessionCacheId ?? null,
+			sessionName: handle.sessionName,
+			workspaceId: handle.workspaceId,
+			restored: handle.restored === true,
+			briefing: handle.briefing ?? "none",
+			pendingApproval: handle.pendingApproval ?? null,
+			createdAt: handle.createdAt,
+			updatedAt: handle.updatedAt
+		};
+	}
+	list() {
+		return [...this.agents.values()].map((handle) => this.meta(handle));
+	}
+	/** Workspace-scoped view: agents whose working directory IS this folder or
+	 * lives under it. Used by the radar panel / agent_list after a workspace
+	 * switch, so each folder only sees its own agents. */
+	listByCwd(cwd) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		return [...this.agents.values()]
+			.filter((handle) => handle.cwd === target || handle.cwd.startsWith(target + sep()))
+			.map((handle) => this.meta(handle));
+	}
+	get(id) {
+		return this.agents.get(id);
+	}
+	/** 会话历史（buildSessionList）需要：返回当前运行中的智能体行（node-pty 下直接来自 agents Map）。 */
+	/** 运行中的窗口（node-pty 下即 agents Map 里进程真实存活的 handle）。 */
+	runningSessions() {
+		const out = [];
+		for (const h of this.agents.values()) {
+			if (h.exited === true || h.status === "exited" || h.pty === null || h.pty === void 0 || !isPidAlive(h.pid)) continue;
+			// 绑定用的是「引擎会话缓存 ID」（会话文件 id），不是创建时的 DSH 会话 id：
+			// 未知的在此按（引擎+cwd+创建时间）发现补齐 —— 见 _discoverSessionId。
+			if (!h.sessionCacheId) this._discoverSessionId(h);
+			out.push({
+				agentId: h.id,
+				name: h.name,
+				type: h.type,
+				cwd: h.cwd,
+				pid: h.pid,
+				sessionId: h.sessionCacheId ?? "",
+				status: h.status,
+				createdAt: h.createdAt,
+				updatedAt: h.updatedAt
+			});
+		}
+		return out;
+	}
+	/** 其他运行窗口已占用的会话缓存 ID 集合（同一引擎同目录开两个窗口时不互抢会话）。 */
+	_claimedSessionIds(self) {
+		const claimed = new Set();
+		for (const o of this.agents.values()) {
+			if (o === self || !o.sessionCacheId) continue;
+			claimed.add(o.sessionCacheId);
+		}
+		return claimed;
+	}
+	/** 引擎会话目录（claude/codebuddy 的 projects/<slug>；codex 的 sessions 树）。 */
+	_sessionDirOf(type, cwd) {
+		if (type === "claude") return join(homedir(), ".claude", "projects", String(cwd ?? "").replace(/[^a-zA-Z0-9]+/g, "-"));
+		if (type === "codebuddy") return join(homedir(), ".codebuddy", "projects", String(cwd ?? "").replace(/^\/+/, "").replace(/[^a-zA-Z0-9_]+/g, "-"));
+		if (type === "codex") return join(homedir(), ".codex", "sessions");
+		return null; // opencode 走 sqlite db
+	}
+	/**
+	 * 找该窗口「出生之后」新落盘的引擎会话文件（{ path, id } | null）。
+	 * claude/codebuddy：projects/<slug>/ 下 mtime >= bornAfter 的最新 .jsonl；
+	 * codex：sessions 树里 session_meta.cwd 匹配的最新 rollout-*.jsonl。
+	 * 引擎在首条消息后才写会话文件 —— 所以新建窗口初始拿不到，随轮询补齐。
+	 */
+	_latestSessionFile(handle, bornAfter) {
+		const dir = this._sessionDirOf(handle.type, handle.cwd);
+		if (dir === null || handle.type === "codex") {
+			if (handle.type !== "codex") return null;
+			let best = null;
+			const walk = (d) => {
+				let entries = [];
+				try {
+					entries = readdirSync(d, { withFileTypes: true });
+				} catch {
+					return;
+				}
+				for (const e of entries) {
+					const p = join(d, e.name);
+					if (e.isDirectory()) {
+						walk(p);
+					} else if (e.name.endsWith(".jsonl")) {
+						try {
+							const st = statOf(p);
+							if (st === null || st.mtimeMs < bornAfter) continue;
+							const first = readFileSync(p, "utf8").split("\n").find((l) => l.includes("session_meta"));
+							const meta = first ? JSON.parse(first).payload ?? {} : {};
+							if (meta.cwd !== handle.cwd) continue;
+							const id = meta.session_id ?? "";
+							if (id === "") continue;
+							if (best === null || st.mtimeMs > best.mtimeMs) best = { path: p, id, mtimeMs: st.mtimeMs };
+						} catch {}
+					}
+				}
+			};
+			walk(dir);
+			return best;
+		}
+		let best = null;
+		try {
+			for (const f of readdirSync(dir)) {
+				if (!f.endsWith(".jsonl")) continue;
+				const full = join(dir, f);
+				const st = statOf(full);
+				if (st === null || st.mtimeMs < bornAfter) continue;
+				if (best === null || st.mtimeMs > best.mtimeMs) best = { path: full, id: f.replace(/\.jsonl$/, ""), mtimeMs: st.mtimeMs };
+			}
+		} catch {}
+		return best;
+	}
+	/**
+	 * 为运行窗口发现并绑定真实的引擎会话 ID（会话缓存 ID）。
+	 * 只认 handle.createdAt 之后新落盘的会话文件 —— 绝不会把更早的空闲历史会话
+	 * 误标成运行中（保留「精确命中」原则，同时让命中真正可能发生）。
+	 * opencode 没有会话文件，改查它自己的 session db。
+	 */
+	_discoverSessionId(handle) {
+		const now = Date.now();
+		if ((handle._sessionScanAt ?? 0) > now - 1500) return; // 节流：1.5s 一次
+		handle._sessionScanAt = now;
+		const claimed = this._claimedSessionIds(handle);
+		if (handle.type === "opencode") {
+			try {
+				const db = join(homedir(), ".local", "share", "opencode", "opencode.db");
+				if (!existsSync(db)) return;
+				const esc = String(handle.cwd ?? "").replace(/'/g, "''");
+				const id = execFileSync("/usr/bin/sqlite3", [db, `SELECT id FROM session WHERE directory='${esc}' AND time_archived IS NULL AND time_created >= ${Math.floor((handle.createdAt ?? 0) - 5000)} ORDER BY time_created DESC LIMIT 1;`], { timeout: 5000 }).toString().trim();
+				if (id !== "" && !claimed.has(id)) handle.sessionCacheId = id;
+			} catch {}
+			return;
+		}
+		const found = this._latestSessionFile(handle, (handle.createdAt ?? 0) - 5000);
+		if (found !== null && !claimed.has(found.id)) handle.sessionCacheId = found.id;
+	}
+	/** 简报是否已落进引擎会话文件（= 对话已开始、会话卡片有了数据源）。 */
+	_briefingLandedInFile(handle, sinceMs) {
+		try {
+			const found = this._latestSessionFile(handle, sinceMs);
+			if (found === null) return false;
+			return readFileSync(found.path, "utf8").slice(-131072).includes("[dsh-agent-commander]");
+		} catch {
+			return false;
+		}
+	}
+	/** 会话巡检需要：node-pty 下所有运行窗口本来就在 agents Map，无需接管别的宿主 → 空操作。 */
+	syncPaneAgents(_cwd) { /* noop */ }
+	/** 恢复一个历史会话：node-pty 执行引擎 resume 命令。返回新 handle。 */
+	async restoreSession({ engine, sessionId: sid, cwd, name }) {
+		const binary = this.binaries[engine];
+		if (binary === null) throw new Error(`引擎 "${engine}" 未安装`);
+		const targetCwd = typeof cwd === "string" && cwd !== "" ? cwd : this.baseCwd;
+		const args = RESUME_COMMANDS[engine]?.(sid) ?? [ "--resume", String(sid) ];
+		const agentId = randomUUID().slice(0, 8);
+		const handle = {
+			id: agentId,
+			type: engine,
+			name: typeof name === "string" && name !== "" ? name : `${engine}-resume`,
+			role: "",
+			skills: [],
+			cwd: targetCwd,
+			sessionId: String(sid ?? ""),
+			// 恢复的会话 ID 本身就是引擎会话 id → 直接绑定，运行中标记立即可见。
+			sessionCacheId: String(sid ?? ""),
+			sessionName: "",
+			workspaceId: "",
+			restored: true,
+			pid: 0,
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			lastOutputAt: Date.now(),
+			briefing: "none",
+			exited: false,
+			exitCode: null,
+			status: "idle",
+			transcript: "",
+			pendingApproval: void 0,
+			pty: this.nodePty.spawn(binary, args, {
+				name: "xterm-256color",
+				cols: 80,
+				rows: 24,
+				cwd: targetCwd,
+				env: this.agentEnv(targetCwd)
+			})
+		};
+		handle.pid = handle.pty.pid;
+		handle.pty.onData((data) => {
+			handle.transcript += data;
+			if (handle.transcript.length > this.transcriptLimit) handle.transcript = handle.transcript.slice(handle.transcript.length - this.transcriptLimit);
+			handle.updatedAt = Date.now();
+			handle.lastOutputAt = Date.now();
+			const next = deriveStatus(handle.transcript, handle.status);
+			if (next !== handle.status) { handle.status = next; this.scheduleStatusNotify(); }
+		});
+		handle.pty.onExit(({ exitCode }) => {
+			clearTimeout(handle._monitorTimer);
+			handle.exited = true;
+			handle.exitCode = exitCode;
+			handle.status = "exited";
+			handle.updatedAt = Date.now();
+			this.notify();
+		});
+		this.agents.set(agentId, handle);
+		this.notify();
+		return handle;
+	}
+	send(id, text, submit = false) {
+		const handle = this.requireLive(id);
+		if (submit) {
+			// Two-phase write: text first, Enter ~120ms later. A single big
+			// write with a trailing \r can be swallowed by a TUI mid-redraw or
+			// multi-line input state; splitting makes submission reliable.
+			handle.pty.write(text);
+			setTimeout(() => {
+				try {
+					handle.pty.write("\r");
+				} catch {}
+			}, 120);
+		} else {
+			handle.pty.write(text);
+		}
+		handle.updatedAt = Date.now();
+	}
+	resize(id, cols, rows) {
+		const handle = this.requireLive(id);
+		handle.pty.resize(Math.max(2, Math.floor(cols)), Math.max(2, Math.floor(rows)));
+	}
+	signal(id, signal) {
+		if (!this.allowedSignals.includes(signal)) throw new Error(`signal "${signal}" not allowed — use ${this.allowedSignals.join(", ")}`);
+		const handle = this.agents.get(id);
+		if (handle === void 0) throw new Error(`agent "${id}" not found`);
+		try {
+			handle.pty.kill(signal);
+		} catch {}
+	}
+	/** Click-confirm a prompt: sends "1" + Enter (approves claude/opencode permission dialogs). */
+	approve(id, choice = "1") {
+		const handle = this.requireLive(id);
+		handle.pty.write(String(choice));
+		setTimeout(() => {
+			try {
+				handle.pty.write("\r");
+			} catch {}
+		}, 120);
+		// 若挂起了「待确认」的关键 yes/no，用户已决定 → 清掉并通知刷新。
+		if (handle.pendingApproval !== void 0) {
+			handle.pendingApproval = void 0;
+			this.notify();
+		}
+		handle.updatedAt = Date.now();
+	}
+	/** Start a NEW conversation inside the agent (per-engine command, two-phase submit). */
+	newSession(id) {
+		const handle = this.requireLive(id);
+		const cmd = NEW_SESSION_COMMANDS[handle.type] ?? "/clear";
+		handle.pty.write(cmd);
+		setTimeout(() => {
+			try {
+				handle.pty.write("\r");
+			} catch {}
+		}, 150);
+		handle.updatedAt = Date.now();
+	}
+	/** Compact the current session context (per-engine command, two-phase submit). Reduces token usage by summarizing without clearing history. */
+	compactSession(id) {
+		const handle = this.requireLive(id);
+		const cmd = COMPACT_SESSION_COMMANDS[handle.type];
+		if (!cmd) throw new Error(`agent type "${handle.type}" does not support session compaction`);
+		handle.pty.write(cmd);
+		setTimeout(() => {
+			try {
+				handle.pty.write("\r");
+			} catch {}
+		}, 150);
+		handle.updatedAt = Date.now();
+	}
+	// ---------------------------------------------------------------------------
+	// Cache introspection / compression (per engine)
+	// ---------------------------------------------------------------------------
+	/** Resolve the cache locations for an agent type + cwd, with sizes in bytes. */
+	cacheInfo(type, cwd) {
+		const dirs = [];
+		const home = homedir();
+		if (type === "claude") {
+			// claude's project dir hashes the cwd with every non-alphanumeric char → "-"
+			const project = `-${String(cwd ?? "").replace(/[^A-Za-z0-9]/g, "-").replace(/^-/, "")}`;
+			dirs.push(join(home, ".claude", "projects", project));
+		} else if (type === "opencode") {
+			dirs.push(join(home, ".local", "share", "opencode"));
+			dirs.push(join(home, ".cache", "opencode"));
+		} else if (type === "codex") {
+			dirs.push(join(home, ".codex", "sessions"));
+		} else if (type === "codebuddy") {
+			dirs.push(join(home, ".codebuddy", "projects"));
+		} else if (type === "pi") {
+			dirs.push(join(home, ".pi", "sessions"));
+		} else if (type === "qwen") {
+			dirs.push(join(home, ".qwen"));
+		}
+		let total = 0;
+		const items = [];
+		for (const dir of dirs) {
+			const size = dirSize(dir);
+			if (size > 0 || existsSync(dir)) {
+				total += size;
+				items.push({ path: dir, size });
+			}
+		}
+		return { type, dirs: items, total };
+	}
+	/** One-click compress: VACUUM sqlite DBs and gzip session logs older than 1 day. Returns freed bytes. */
+	async compressCache(type, cwd) {
+		const info = this.cacheInfo(type, cwd);
+		let freed = 0;
+		const compressed = [];
+		const sqlite = loadSqlite();
+		for (const dir of info.dirs) {
+			if (!existsSync(dir)) continue;
+			// 1) VACUUM sqlite databases
+			for (const dbPath of walkFiles(dir, (p) => p.endsWith(".db") || p.endsWith(".sqlite") || p.endsWith(".sqlite3"))) {
+				try {
+					const before = statSize(dbPath);
+					const db = new sqlite.DatabaseSync(dbPath);
+					db.exec("VACUUM;");
+					db.close();
+					const after = statSize(dbPath);
+					freed += Math.max(0, before - after);
+					compressed.push({ path: dbPath, before, after });
+				} catch (err) {
+					console.warn("[dsh-agent-commander] VACUUM failed for", dbPath, err?.message ?? err);
+				}
+			}
+			// 2) gzip session logs (jsonl/json) older than 1 day
+			const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+			for (const file of walkFiles(dir, (p) => (p.endsWith(".jsonl") || p.endsWith(".json")) && !p.endsWith(".gz"))) {
+				try {
+					const st = statOf(file);
+					if (st === null || st.mtimeMs > dayAgo) continue;
+					const before = st.size;
+					await gzipFile(file);
+					freed += before;
+					compressed.push({ path: file, before, after: 0, gzipped: true });
+				} catch {}
+			}
+		}
+		return { type, freed, total: info.total, items: compressed };
+	}
+	/** Aggregate cache info across all open agents. */
+	allCacheInfo() {
+		return [...this.agents.values()].map((handle) => this.cacheInfo(handle.type, handle.cwd));
+	}
+	read(id, maxBytes = 12000) {
+		const handle = this.requireLive(id);
+		let text = handle.transcript;
+		let truncated = false;
+		if (text.length > maxBytes) {
+			text = text.slice(text.length - maxBytes);
+			truncated = true;
+		}
+		return { output: stripAnsi(text), truncated, exited: handle.exited, exitCode: handle.exitCode, status: handle.status };
+	}
+	/**
+	* Close an agent. `graceful` asks the agent to exit itself first (claude:
+	* `/exit`, others: `exit`) and only escalates (SIGINT → kill) if the process
+	* does not leave within the grace windows — the UI's ✕ uses this so agents
+	* shut down cleanly instead of being SIGKILLed mid-work. A unified cleanup
+	* clears both timers and the exit subscription on EVERY exit path.
+	*/
+	close(id, graceful = false) {
+		const handle = this.agents.get(id);
+		if (handle === void 0) throw new Error(`agent "${id}" not found`);
+		// Exit monitor: stop auto-answering, mark the agent 退出中 and keep the
+		// handle until the PTY process has FULLY exited (cleanup below runs on
+		// the real onExit, or after the kill escalation for stuck processes).
+		if (handle._monitor !== void 0) handle._monitor.phase = "exit";
+		if (!handle.exited) {
+			handle.status = "closing";
+			this.notify();
+		}
+		let cleaned = false;
+		const cleanup = () => {
+			if (cleaned) return;
+			cleaned = true;
+			clearTimeout(handle.__closeGraceTimer);
+			clearTimeout(handle.__closeKillTimer);
+			handle.__exitSub?.dispose?.();
+			if (this.agents.get(id) === handle) {
+				this.agents.delete(id);
+				this.notify();
+				this.persist();
+			}
+		};
+		if (!graceful || handle.exited) {
+			handle.__exitSub = handle.pty.onExit(() => cleanup());
+			try {
+				handle.pty.kill();
+			} catch {}
+			// give the process a moment to exit before dropping the handle
+			setTimeout(() => cleanup(), 300);
+			return;
+		}
+		handle.__exitSub = handle.pty.onExit(() => cleanup());
+		const exitCmd = EXIT_COMMANDS[handle.type] ?? "";
+		if (exitCmd !== "") {
+			try {
+				handle.pty.write(`${exitCmd}\r`);
+			} catch {}
+		}
+		// Engines with no text exit (opencode) fall through to SIGINT escalation.
+		handle.__closeGraceTimer = setTimeout(() => {
+			if (this.agents.get(id) !== handle || handle.exited) return;
+			try {
+				handle.pty.kill("SIGINT");
+			} catch {}
+			handle.__closeKillTimer = setTimeout(() => {
+				if (this.agents.get(id) !== handle || handle.exited) return;
+				try {
+					handle.pty.kill();
+				} catch {}
+				cleanup();
+			}, 4000);
+		}, 5000);
+		this.notify();
+	}
+	requireLive(id) {
+		const handle = this.agents.get(id);
+		if (handle === void 0) throw new Error(`agent "${id}" not found`);
+		if (handle.exited) throw new Error(`agent "${id}" has exited (code ${handle.exitCode ?? "?"})`);
+		return handle;
+	}
+	disposeAll() {
+		if (this.statusSweepTimer !== null) { clearInterval(this.statusSweepTimer); this.statusSweepTimer = null; }
+		if (this.statusTimer !== null) { clearTimeout(this.statusTimer); this.statusTimer = null; }
+		for (const id of [...this.agents.keys()]) this.close(id);
+	}
+	/**
+	* Persist workspace config: each project root's `.deepseek/agents.json`
+	* records its open agents (count, session ids, cwd, pid), and a global index
+	* (~/.dsh/agent-commander/workspaces.json) remembers every known project so
+	* a restart can restore even before a session opens.
+	*
+	* Rules:
+	*   • ONLY live (non-exited) agents are written — closing/exiting an agent
+	*     deletes its record, so it never comes back as a "restore" after reboot.
+	*   • No transcript dumps (transcriptTail removed — raw terminal bytes are
+	*     garbage in JSON and useless for restore).
+	*   • All configs land in the PROJECT ROOT (the session working directory of
+	*     the agent that created them), not scattered per subfolder cwd.
+	*   • Workspaces whose agents are all gone get their agents.json deleted.
+	*/
+	persist() {
+		try {
+			const state = [...this.agents.values()]
+				.filter((handle) => !handle.exited)
+				.map((handle) => this.meta(handle));
+			// Group by project root (defaults to the session's working directory).
+			const byCwd = new Map();
+			for (const entry of state) {
+				const cwd = this.projectRootOf !== null ? this.projectRootOf(entry) : (entry.cwd || this.baseCwd);
+				if (!byCwd.has(cwd)) byCwd.set(cwd, []);
+				byCwd.get(cwd).push(entry);
+			}
+			const indexFile = join(dshDataDir(), "workspaces.json");
+			let prev = [];
+			try {
+				prev = existsSync(indexFile) ? JSON.parse(readFileSync(indexFile, "utf8")) : [];
+			} catch {}
+			const prevRoots = Array.isArray(prev) ? [...new Set(prev)] : [];
+			// While restoring (restoreState/scanCwd re-spawning saved agents)
+			// the file writes are skipped entirely: the config files already
+			// hold the saved data, and rewriting them mid-loop would drop the
+			// not-yet-processed entries of the same root. The restore paths
+			// own the files and reconcile them when they finish.
+			if (!this.restoring) {
+				for (const [cwd, entries] of byCwd) {
+					mkdirSync(join(cwd, this.memoryDir), { recursive: true });
+					writeFileSync(join(cwd, this.memoryDir, "agents.json"), JSON.stringify({ agents: entries }, null, 2), "utf8");
+				}
+			}
+			// Cleanup: roots with no live agents in THIS registry no longer need
+			// a config. The registry is the source of truth — the file's own
+			// `exited` flags go stale the moment a closed agent stops being
+			// persisted (persist with an empty live set used to rewrite
+			// nothing, and the old hasLive check then read that stale file and
+			// kept it), which is exactly how closed agents resurrected on
+			// restart. Only explicitly-exited / no-longer-installable records
+			// are kept as "ghosts" (已保存·未运行 cards); the file is deleted
+			// when nothing worth keeping remains.
+			for (const cwd of prevRoots) {
+				if (byCwd.has(cwd)) continue;
+				if (this.restoring || this.shuttingDown) continue;
+				try {
+					const file = join(cwd, this.memoryDir, "agents.json");
+					if (!existsSync(file)) continue;
+					let saved = [];
+					try {
+						const parsed = JSON.parse(readFileSync(file, "utf8"));
+						const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+						if (Array.isArray(list)) saved = list;
+					} catch {}
+					const ghosts = saved.filter((e) => e != null && typeof e === "object"
+						&& (e.exited === true || !AGENT_TYPES.includes(e?.type) || resolveBinary(e?.type) === null));
+					if (ghosts.length === 0) unlinkSync(file);
+					else writeFileSync(file, JSON.stringify({ agents: ghosts }, null, 2), "utf8");
+				} catch {}
+			}
+			// Rebuild the global workspace index: keep only roots with a config.
+			const merged = new Set();
+			for (const cwd of [...prevRoots, ...byCwd.keys()]) {
+				if (existsSync(join(cwd, this.memoryDir, "agents.json"))) merged.add(cwd);
+			}
+			mkdirSync(dirname(indexFile), { recursive: true });
+			writeFileSync(indexFile, JSON.stringify([...merged], null, 2), "utf8");
+		} catch (error) {
+			console.warn("[dsh-agent-commander] persist failed:", error?.message ?? error);
+		}
+	}
+	/** Re-spawn one saved agent entry (from a folder's .deepseek/agents.json).
+	 * Shared by restoreState / scanCwd / restoreSaved. Returns the live handle,
+	 * the existing handle if it is already running, or null when the entry is
+	 * exited / malformed / cannot be spawned. */
+	spawnSaved(entry, fallbackCwd) {
+		if (entry == null || typeof entry !== "object") return null;
+		if (!AGENT_TYPES.includes(entry?.type)) return null;
+		if (entry.exited === true) return null;
+		const existing = this.agents.get(entry?.id);
+		if (existing !== void 0) return existing;
+		try {
+			return this.create({
+				type: entry.type,
+				name: entry.name,
+				role: entry.role,
+				skills: entry.skills,
+				cwd: entry.cwd ?? fallbackCwd,
+				cols: 80,
+				rows: 24,
+				id: entry.id,
+				sessionId: entry.sessionId,
+				sessionName: entry.sessionName,
+				workspaceId: entry.workspaceId,
+				restored: true
+			});
+		} catch (error) {
+			console.warn(`[dsh-agent-commander] spawn saved agent ${entry?.id ?? "?"} failed:`, error?.message ?? error);
+			return null;
+		}
+	}
+	/** Re-detect a folder's saved agent config (.deepseek/agents.json): restore
+	 * non-exited saved agents that are not running, and return the folder's live
+	 * agents plus ghost records for saved agents that could not be spawned. This
+	 * is what makes the radar list follow the workspace after every workspace
+	 * switch. Closed/exited agents are purged from the file here (self-heal), so
+	 * they never resurface as "restore" cards. */
+	scanCwd(cwd) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		const file = join(target, this.memoryDir, "agents.json");
+		let saved = [];
+		if (existsSync(file)) {
+			try {
+				const parsed = JSON.parse(readFileSync(file, "utf8"));
+				const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+				if (Array.isArray(list)) saved = list;
+			} catch {}
+		}
+		// Drop stale closed records left by the OLD persist (exited yet still
+		// spawnable — 关闭即删除 leftovers) and keep live records plus genuine
+		// ghosts (explicitly exited, or an engine that is no longer installed).
+		// Note: records with a stale `exited:false` flag can't be told apart
+		// from legitimately-saved agents here — persist() keeps the config
+		// accurate so such records never exist in the first place.
+		const kept = saved.filter((e) => e != null && typeof e === "object"
+			&& (e.exited !== true || !AGENT_TYPES.includes(e?.type) || resolveBinary(e?.type) === null));
+		let restored = 0;
+		const ghosts = [];
+		// Guard persist() (triggered by create() while spawning) against
+		// rewriting this folder's config mid-loop, which would drop the
+		// not-yet-processed saved entries. The config is reconciled below
+		// once the whole list has been processed.
+		this.restoring = true;
+		try {
+			for (const entry of kept) {
+				if (entry == null || typeof entry !== "object") continue;
+				if (!AGENT_TYPES.includes(entry?.type)) continue;
+				// Already running in this registry? Keep it, but don't count as
+				// "restored" — only newly spawned agents count. spawnSaved returns
+				// null when the entry cannot be spawned (never undefined).
+				const alreadyRunning = entry.id !== void 0 && this.agents.has(entry.id);
+				const handle = alreadyRunning ? this.agents.get(entry.id) : this.spawnSaved(entry, target);
+				if (handle !== null) {
+					if (!alreadyRunning) restored += 1;
+					continue;
+				}
+				// Saved but could not be spawned (engine no longer installed, …):
+				// keep it visible as "已保存·未运行" so the user can retry or forget it.
+				ghosts.push({ ...entry, running: false, status: "exited" });
+			}
+		} finally {
+			this.restoring = false;
+		}
+		// Reconcile the config: write back the kept records (live agents +
+		// ghosts), delete the file when nothing remains.
+		if (kept.length === 0) {
+			try { unlinkSync(file); } catch {}
+		} else {
+			try {
+				writeFileSync(file, JSON.stringify({ agents: kept }, null, 2), "utf8");
+			} catch {}
+		}
+		return { agents: this.listByCwd(target), saved: ghosts, restored };
+	}
+	/** Forget (delete) ONE saved agent record of a folder — the ghost ✕ button.
+	 * Removes the entry from the project root's agents.json (deletes the file
+	 * when it becomes empty). */
+	forgetSaved(cwd, id) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		const file = join(target, this.memoryDir, "agents.json");
+		if (!existsSync(file)) return { removed: false };
+		let saved = [];
+		try {
+			const parsed = JSON.parse(readFileSync(file, "utf8"));
+			const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+			if (Array.isArray(list)) saved = list;
+		} catch {
+			return { removed: false };
+		}
+		const next = saved.filter((e) => e == null || typeof e !== "object" || e.id !== id);
+		if (next.length === saved.length) return { removed: false };
+		try {
+			if (next.length === 0) unlinkSync(file);
+			else writeFileSync(file, JSON.stringify({ agents: next }, null, 2), "utf8");
+		} catch {
+			return { removed: false };
+		}
+		return { removed: true };
+	}
+	/** Re-spawn ONE saved agent of a folder (the ghost "恢复" button). */
+	restoreSaved(cwd, id) {
+		const target = typeof cwd === "string" && cwd !== "" ? resolve(cwd) : this.baseCwd;
+		const existing = this.agents.get(id);
+		if (existing !== void 0) return this.meta(existing);
+		const file = join(target, this.memoryDir, "agents.json");
+		if (!existsSync(file)) throw new Error(`no saved agents config in "${target}"`);
+		let saved = [];
+		try {
+			const parsed = JSON.parse(readFileSync(file, "utf8"));
+			const list = Array.isArray(parsed) ? parsed : parsed?.agents;
+			if (Array.isArray(list)) saved = list;
+		} catch {
+			throw new Error(`cannot read "${file}"`);
+		}
+		const entry = saved.find((e) => e != null && typeof e === "object" && e.id === id);
+		if (entry === void 0) throw new Error(`agent "${id}" not found in "${file}"`);
+		const handle = this.spawnSaved(entry, target);
+		if (handle === null) throw new Error(`agent "${id}" cannot be restored (type "${entry?.type ?? "?"}" not installed or exited)`);
+		return this.meta(handle);
+	}
+	/** Re-spawn every saved non-exited agent from ALL known workspaces, replaying transcript tails as context. */
+	restoreState() {
+		if (this.nodePty === null) return 0;
+		this.restoring = true;
+		let restored = 0;
+		try {
+			const indexFile = join(dshDataDir(), "workspaces.json");
+			const roots = existsSync(indexFile) ? JSON.parse(readFileSync(indexFile, "utf8")) : [];
+			if (!Array.isArray(roots)) return 0;
+			const seen = new Set();
+			for (const root of roots) {
+				const file = join(root, this.memoryDir, "agents.json");
+				if (!existsSync(file)) continue;
+				let state;
+				try {
+					state = JSON.parse(readFileSync(file, "utf8"));
+				} catch {
+					continue;
+				}
+				const list = Array.isArray(state) ? state : state?.agents;
+				if (!Array.isArray(list)) continue;
+				for (const entry of list) {
+					if (entry == null || typeof entry !== "object") continue;
+					if (seen.has(entry?.id)) continue;
+					seen.add(entry?.id);
+					if (this.spawnSaved(entry, root) !== null) restored += 1;
+				}
+			}
+		} catch (error) {
+			console.warn("[dsh-agent-commander] restoreState failed:", error?.message ?? error);
+		} finally {
+			this.restoring = false;
+		}
+		if (restored > 0) console.info(`[dsh-agent-commander] restored ${restored} agent(s) from workspace configs`);
+		return restored;
+	}
+	/** App shutdown: save live state for the next boot, then kill every PTY. */
+	shutdown() {
+		if (this.statusSweepTimer !== null) { clearInterval(this.statusSweepTimer); this.statusSweepTimer = null; }
+		if (this.statusTimer !== null) { clearTimeout(this.statusTimer); this.statusTimer = null; }
+		// shuttingDown guards persist() against the exit events that killing
+		// the PTYs triggers: the first persist below already captured the live
+		// config, and the post-kill onExit persists must not delete it.
+		this.shuttingDown = true;
+		this.persist();
+		for (const handle of this.agents.values()) {
+			try {
+				handle.pty.kill();
+			} catch {}
+		}
+	}
+	subscribe(fn) {
+		this.listeners.add(fn);
+		return () => {
+			this.listeners.delete(fn);
+		};
+	}
+	notify() {
+		for (const fn of [...this.listeners]) {
+			try {
+				fn();
+			} catch {}
+		}
+	}
+};
+
+function stripAnsi(text) {
+	return text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*\u0007/g, "").replace(/\u001b[()][AB0]/g, "");
+}
+
+// ---------------------------------------------------------------------------
+// HTTP/WS helpers
+// ---------------------------------------------------------------------------
+function writeJson(res, status, body) {
+	const payload = JSON.stringify(body);
+	res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+	res.end(payload);
+}
+function writeOk(res, value) {
+	writeJson(res, 200, { ok: true, value });
+}
+function writeError(res, error) {
+	const status = typeof error?.status === "number" ? error.status : 500;
+	writeJson(res, status, {
+		ok: false,
+		error: {
+			code: "agent-commander-error",
+			message: error instanceof Error ? error.message : String(error)
+		}
+	});
+}
+function readBody(req, limit = BODY_LIMIT) {
+	return new Promise((resolvePromise, reject) => {
+		const chunks = [];
+		let total = 0;
+		req.on("data", (chunk) => {
+			total += chunk.length;
+			if (total > limit) {
+				req.destroy();
+				reject(new Error("request body too large"));
+				return;
+			}
+			chunks.push(chunk);
+		});
+		req.on("end", () => {
+			if (req.destroyed) return;
+			const raw = Buffer.concat(chunks).toString("utf8").trim();
+			if (raw === "") {
+				resolvePromise({});
+				return;
+			}
+			try {
+				resolvePromise(JSON.parse(raw));
+			} catch (error) {
+				reject(error);
+			}
+		});
+		req.on("error", reject);
+	});
+}
+function sessionCwdOf(ctx, sessionId, fallback) {
+	const headerCwd = sessionId === void 0 ? void 0 : ctx.sessions.get(sessionId)?.header?.cwd;
+	if (headerCwd !== void 0 && headerCwd !== "") return headerCwd;
+	if (fallback !== void 0 && fallback !== "") return validateCwd(fallback, undefined);
+	return process.cwd();
+}
+
+// ---------------------------------------------------------------------------
+// Model-facing tools
+// ---------------------------------------------------------------------------
 function registerTools(ctx, registry, storeFor, resolveCwd) {
 	const disposers = [];
 	const register = (tool) => {
@@ -866,11 +2191,11 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 				text: `Opened agent "${value.name}" (${value.type}, id: ${value.id})${value.role ? `\n角色：${value.role}` : ""}. 已在右侧「智能体雷达」面板可见。用 agent_send 派活，agent_read 收结果。`
 			}]
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
 			const sessionId = exec.agent?.session?.id;
 			const cwd = sessionCwdOf(ctx, sessionId, args.cwd);
-			const handle = await registry.create({
+			const handle = registry.create({
 				type: args.type,
 				name: args.name,
 				role: args.role,
@@ -879,7 +2204,7 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 				cols: 80,
 				rows: 24
 			});
-			return { id: handle.id, name: handle.name, type: handle.type, role: handle.role };
+			return Promise.resolve({ id: handle.id, name: handle.name, type: handle.type, role: handle.role });
 		}
 	}));
 	register(defineTool({
@@ -943,7 +2268,7 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 	}));
 	register(defineTool({
 		name: "agent_read",
-		description: "Read an agent's status (终端宿主模式下智能体跑在系统终端窗口，不提供实时输出；output 为空，status/exited 反映进程存活)。要了解结果请用会话历史：GET /agent-commander/api/sessions?cwd=<目录>，或直接查看系统终端窗口。",
+		description: "Read the recent output of an agent terminal (last N bytes of its transcript, ANSI stripped). Use this to see what the agent is doing and collect its report after dispatching a task. Pair with agent_send: send a task, wait, read output until the agent reports completion (look for its summary / task-board update).",
 		parameters: {
 			id: {
 				type: "string",
@@ -1007,10 +2332,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已发送给智能体 ${value.id}${value.submitted ? "（并回车提交）" : ""}。用 agent_read 观察输出。` }]
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
-			await registry.send(args.id, args.text, args.submit === true);
-			return { id: args.id, submitted: args.submit === true };
+			registry.send(args.id, args.text, args.submit === true);
+			return Promise.resolve({ id: args.id, submitted: args.submit === true });
 		}
 	}));
 	register(defineTool({
@@ -1055,21 +2380,21 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 				}];
 			}
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
 			const ids = Array.isArray(args.ids) ? args.ids.filter((s) => typeof s === "string" && s !== "") : [];
 			const submit = args.submit !== false;
 			const results = [];
 			for (const id of ids) {
 				try {
-					await registry.send(id, String(args.text ?? ""), submit);
+					registry.send(id, String(args.text ?? ""), submit);
 					const handle = registry.get(id);
 					results.push({ id, name: handle?.name ?? id, sent: true, error: null });
 				} catch (error) {
 					results.push({ id, name: id, sent: false, error: error instanceof Error ? error.message : String(error) });
 				}
 			}
-			return results;
+			return Promise.resolve(results);
 		}
 	}));
 	register(defineTool({
@@ -1098,10 +2423,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送 ${value.signal}。` }]
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
-			await registry.signal(args.id, args.signal);
-			return { id: args.id, signal: args.signal };
+			registry.signal(args.id, args.signal);
+			return Promise.resolve({ id: args.id, signal: args.signal });
 		}
 	}));
 	register(defineTool({
@@ -1125,10 +2450,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `智能体 ${value.id} 已关闭。` }]
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
-			await registry.close(args.id);
-			return { id: args.id, closed: true };
+			registry.close(args.id);
+			return Promise.resolve({ id: args.id, closed: true });
 		}
 	}));
 	register(defineTool({
@@ -1156,10 +2481,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送确认「${value.choice}」并回车。` }]
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
-			await registry.approve(args.id, args.choice);
-			return { id: args.id, choice: args.choice ?? "1" };
+			registry.approve(args.id, args.choice);
+			return Promise.resolve({ id: args.id, choice: args.choice ?? "1" });
 		}
 	}));
 	register(defineTool({
@@ -1183,10 +2508,10 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 			},
 			render: (_args, value) => [{ type: "text", text: `已向智能体 ${value.id} 发送压缩会话命令。` }]
 		},
-		execute: async (args, exec) => {
+		execute: (args, exec) => {
 			exec.signal.throwIfAborted();
-			await registry.compactSession(args.id);
-			return { id: args.id, compacted: true };
+			registry.compactSession(args.id);
+			return Promise.resolve({ id: args.id, compacted: true });
 		}
 	}));
 	register(defineTool({
@@ -1294,68 +2619,6 @@ function registerTools(ctx, registry, storeFor, resolveCwd) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP/WS helpers — restored from ec254af (were dropped in 0284791's terminal-
-// host rewrite while all call sites stayed: every /agent-commander/api request
-// threw ReferenceError → webServer 400 → client silently kept 0 sessions).
-// ---------------------------------------------------------------------------
-function writeJson(res, status, body) {
-	const payload = JSON.stringify(body);
-	res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-	res.end(payload);
-}
-function writeOk(res, value) {
-	writeJson(res, 200, { ok: true, value });
-}
-function writeError(res, error) {
-	const status = typeof error?.status === "number" ? error.status : 500;
-	writeJson(res, status, {
-		ok: false,
-		error: {
-			code: "agent-commander-error",
-			message: error instanceof Error ? error.message : String(error)
-		}
-	});
-}
-function readBody(req, limit = BODY_LIMIT) {
-	return new Promise((resolvePromise, reject) => {
-		const chunks = [];
-		let total = 0;
-		req.on("data", (chunk) => {
-			total += chunk.length;
-			if (total > limit) {
-				req.destroy();
-				reject(new Error("request body too large"));
-				return;
-			}
-			chunks.push(chunk);
-		});
-		req.on("end", () => {
-			if (req.destroyed) return;
-			const raw = Buffer.concat(chunks).toString("utf8").trim();
-			if (raw === "") {
-				resolvePromise({});
-				return;
-			}
-			try {
-				resolvePromise(JSON.parse(raw));
-			} catch (error) {
-				reject(error);
-			}
-		});
-		req.on("error", reject);
-	});
-}
-// Also dropped in 0284791 while call sites remained (sessions restore/delete,
-// agent open/send/approve/… all route through it) — restore alongside the
-// write helpers above.
-function sessionCwdOf(ctx, sessionId, fallback) {
-	const headerCwd = sessionId === void 0 ? void 0 : ctx.sessions.get(sessionId)?.header?.cwd;
-	if (headerCwd !== void 0 && headerCwd !== "") return headerCwd;
-	if (fallback !== void 0 && fallback !== "") return validateCwd(fallback, undefined);
-	return process.cwd();
-}
-
-// ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
 function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scanner = null) {
@@ -1382,92 +2645,13 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 					rolePresets: Array.isArray(cfg.rolePresets) && cfg.rolePresets.length > 0 ? cfg.rolePresets : [...ROLE_PRESETS],
 					baseCwd: registry.baseCwd,
 					memoryDir: registry.memoryDir,
-					agentTypes: ENGINE_TYPES,
-					terminalApp: cfg.terminalApp ?? "auto",
+					agentTypes: AGENT_TYPES,
 					apiPrefix: API_PREFIX,
-					wsList: WS_LIST
+					wsTerminal: WS_TERMINAL,
+					wsList: WS_LIST,
+					wsSessions: WS_SESSIONS,
+					monitorIntervalMs: Number.isFinite(cfg.monitorIntervalMs) && cfg.monitorIntervalMs > 0 ? Math.trunc(cfg.monitorIntervalMs) : MONITOR_INTERVAL_MS
 				} });
-				return;
-			}
-			if (req.method === "GET" && path === "/terminal/status") {
-				writeOk(res, {
-					app: registry.launcher?.resolveApp?.() ?? "terminal",
-					label: registry.launcher?.label ?? "Terminal.app",
-					apps: TerminalLauncher.detectAll(),
-					engines: ENGINE_TYPES.map((e) => ({ id: e, installed: registry.binaries?.[e] != null }))
-				});
-				return;
-			}
-			// 会话历史（cc-switch 式）：列出 / 恢复 / 删除。
-			// 会话即窗口：herdr 实时窗口与历史会话合并对接。
-			if (req.method === "GET" && path === "/sessions") {
-				const cwd = url.searchParams.get("cwd") ?? "";
-				const sessions = cwd !== "" ? await scanner.list(cwd) : [];
-				const running = registry.runningSessionKeys();
-				const engineSessions = new Map(); // engine → 该 cwd 的历史会话（按时间倒序）
-				for (const s of sessions) {
-					if (cwd !== "" && s.cwd !== cwd) continue;
-					if (!engineSessions.has(s.engine)) engineSessions.set(s.engine, []);
-					engineSessions.get(s.engine).push(s);
-				}
-				for (const s of sessions) s.running = false;
-				const matched = new Set(); // `${engine}:${sessionId}` 已匹配
-				for (const [key, r] of running) {
-					if (cwd !== "" && !key.endsWith(`:${cwd}`)) continue;
-					const engine = key.slice(0, key.length - cwd.length - 1);
-					const list = engineSessions.get(engine) ?? [];
-					// 1) 精确命中：窗口的会话缓存 ID == 历史会话 id。
-					let hit = r.sessionId !== "" ? list.find((s) => s.id === r.sessionId) : void 0;
-					// 2) 临时命中：窗口尚无会话 ID（claude 集成不上报、新建初期）→
-					//    匹配「窗口启动之后」的最新历史会话 —— 绝不用全局最新，
-					//    否则会误标上一个窗口的旧会话。
-					if (hit === void 0 && r.sessionId === "" && Number.isFinite(r.createdAt)) {
-						hit = list.find((s) => (s.time ?? 0) >= (r.createdAt ?? 0) - 5000);
-					}
-					if (hit !== void 0) {
-						hit.running = true;
-						hit.runningAgent = r; // { agentId, name, pid, sessionId, status, createdAt, paneId }
-						matched.add(`${engine}:${hit.id}`);
-					}
-				}
-				// 3) 仍未被任何历史会话承接的窗口 → 以「运行中」条目追加（会话即窗口：
-				//    窗口本身就是一个会话；会话 ID 未探测到时用 live:<agentId> 占位，
-				//    探测到后精确命中、占位条目自然消失）。
-				for (const [key, r] of running) {
-					if (cwd !== "" && !key.endsWith(`:${cwd}`)) continue;
-					const engine = key.slice(0, key.length - cwd.length - 1);
-					const id = r.sessionId !== "" ? r.sessionId : `live:${r.agentId}`;
-					if (matched.has(`${engine}:${id}`)) continue;
-					sessions.push({
-						engine,
-						id,
-						title: `运行中：${r.name}`,
-						time: r.createdAt ?? Date.now(),
-						tokens: 0,
-						cost: null,
-						cwd,
-						running: true,
-						runningAgent: r
-					});
-					matched.add(`${engine}:${id}`);
-				}
-				writeOk(res, { sessions });
-				return;
-			}
-			if (req.method === "POST" && path === "/sessions/restore") {
-				const body = await rb(req);
-				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
-				const handle = await registry.restoreSession({ engine: String(body.engine ?? ""), sessionId: String(body.id ?? ""), cwd, name: body.name });
-				writeOk(res, { agent: registry.meta(handle) });
-				return;
-			}
-			const sessionDelete = path.match(/^\/sessions\/([a-z]+)\/([^/]+)$/);
-			if (req.method === "DELETE" && sessionDelete !== null) {
-				const engine = decodeURIComponent(sessionDelete[1]);
-				const id = decodeURIComponent(sessionDelete[2]);
-				const cwd = sessionCwdOf(ctx, undefined, url.searchParams.get("cwd") ?? "");
-				await scanner.deleteSession(engine, id, cwd);
-				writeOk(res, { engine, id, deleted: true });
 				return;
 			}
 			if (req.method === "GET" && path === "/agents") {
@@ -1497,6 +2681,30 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 				writeOk(res, registry.forgetSaved(cwd, forgetMatch[1]));
 				return;
 			}
+			// 会话历史（cc-switch 式）：列出 / 恢复 / 删除。列表复用巡检的 buildSessionList，
+			// 保证 API 与 WS 推送的列表一致。
+			if (req.method === "GET" && path === "/sessions") {
+				const cwd = url.searchParams.get("cwd") ?? "";
+				writeOk(res, { sessions: await buildSessionList(registry, scanner, cwd) });
+				return;
+			}
+			if (req.method === "POST" && path === "/sessions/restore") {
+				const body = await rb(req);
+				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
+				const handle = await registry.restoreSession({ engine: String(body.engine ?? ""), sessionId: String(body.id ?? ""), cwd, name: body.name });
+				writeOk(res, { agent: registry.meta(handle) });
+				return;
+			}
+			const sessionDelete = path.match(/^\/sessions\/([^/]+)\/([^/]+)$/);
+			if (sessionDelete !== null && req.method === "DELETE") {
+				const [, engine, id] = sessionDelete;
+				const cwd = sessionCwdOf(ctx, url.searchParams.get("sessionId"), url.searchParams.get("cwd"));
+				const resDel = scanner !== null && typeof scanner.deleteSession === "function"
+					? await scanner.deleteSession(engine, decodeURIComponent(id), cwd)
+					: false;
+				writeOk(res, { engine, id: decodeURIComponent(id), deleted: resDel !== false });
+				return;
+			}
 			if (req.method === "GET" && path === "/binaries") {
 				writeOk(res, { binaries: detectBinaries() });
 				return;
@@ -1508,7 +2716,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 			if (req.method === "POST" && path === "/agents") {
 				const body = await rb(req);
 				const cwd = sessionCwdOf(ctx, body.sessionId, body.cwd);
-				const handle = await registry.create({
+				const handle = registry.create({
 					type: String(body.type ?? ""),
 					name: body.name,
 					role: body.role,
@@ -1526,7 +2734,7 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 			if (req.method === "DELETE" && path.startsWith("/agents/")) {
 				const id = path.slice("/agents/".length);
 				const graceful = url.searchParams.get("graceful") === "1";
-				await registry.close(id, graceful);
+				registry.close(id, graceful);
 				writeOk(res, { id, closed: true, graceful });
 				return;
 			}
@@ -1536,34 +2744,34 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 				const [, id, op] = agentMatch;
 				if (op === "send" && req.method === "POST") {
 					const body = await rb(req);
-					await registry.send(id, String(body.text ?? ""), body.submit === true);
+					registry.send(id, String(body.text ?? ""), body.submit === true);
 					writeOk(res, { id, submitted: body.submit === true });
 					return;
 				}
 				if (op === "read" && req.method === "GET") {
 					const bytes = Number(url.searchParams.get("bytes") ?? 12000);
-					writeOk(res, await registry.read(id, Number.isFinite(bytes) ? bytes : 12000));
+					writeOk(res, registry.read(id, Number.isFinite(bytes) ? bytes : 12000));
 					return;
 				}
 				if (op === "approve" && req.method === "POST") {
 					const body = await rb(req);
-					await registry.approve(id, body.choice === void 0 ? "1" : String(body.choice));
+					registry.approve(id, body.choice === void 0 ? "1" : String(body.choice));
 					writeOk(res, { id, choice: body.choice === void 0 ? "1" : String(body.choice) });
 					return;
 				}
 				if (op === "signal" && req.method === "POST") {
 					const body = await rb(req);
-					await registry.signal(id, String(body.signal ?? ""));
+					registry.signal(id, String(body.signal ?? ""));
 					writeOk(res, { id, signal: body.signal });
 					return;
 				}
 				if (op === "new-session" && req.method === "POST") {
-					await registry.newSession(id);
+					registry.newSession(id);
 					writeOk(res, { id, newSession: true });
 					return;
 				}
 				if (op === "compact" && req.method === "POST") {
-					await registry.compactSession(id);
+					registry.compactSession(id);
 					writeOk(res, { id, compacted: true });
 					return;
 				}
@@ -1630,11 +2838,21 @@ function registerApi(ctx, registry, storeFor, fence, resolveCwd, cfg = {}, scann
 // ---------------------------------------------------------------------------
 // WebSocket routes
 // ---------------------------------------------------------------------------
-function registerWebsockets(ctx, registry, fence) {
+function registerWebsockets(ctx, registry, fence, cfg = {}, monitor = null) {
 	const { WebSocketServer } = getWs();
+	const terminalWss = new WebSocketServer({ noServer: true });
 	const listWss = new WebSocketServer({ noServer: true });
-	// 终端模式：不再有终端 WS（浏览器不渲染终端）；只有列表 WS 推送运行中
-	// 智能体状态（2s 进程存活轮询 → 状态变化时推送）。
+	const sessionsWss = new WebSocketServer({ noServer: true });
+	ctx.effect(() => ctx.webServer.registerUpgrade({
+		path: WS_TERMINAL,
+		handler: (req, socket, head) => {
+			if (!fence(req)) {
+				socket.destroy();
+				return;
+			}
+			terminalWss.handleUpgrade(req, socket, head, (ws) => attachTerminal(registry, ws, req, cfg));
+		}
+	}), "dsh-agent-commander: terminal WebSocket");
 	ctx.effect(() => ctx.webServer.registerUpgrade({
 		path: WS_LIST,
 		handler: (req, socket, head) => {
@@ -1645,9 +2863,42 @@ function registerWebsockets(ctx, registry, fence) {
 			listWss.handleUpgrade(req, socket, head, (ws) => attachList(registry, ws, req));
 		}
 	}), "dsh-agent-commander: list WebSocket");
+	ctx.effect(() => ctx.webServer.registerUpgrade({
+		path: WS_SESSIONS,
+		handler: (req, socket, head) => {
+			if (!fence(req)) {
+				socket.destroy();
+				return;
+			}
+			sessionsWss.handleUpgrade(req, socket, head, (ws) => attachSessions(ws, req, monitor));
+		}
+	}), "dsh-agent-commander: sessions WebSocket");
 	ctx.effect(() => () => {
+		terminalWss.close();
 		listWss.close();
+		sessionsWss.close();
 	}, "dsh-agent-commander: websocket teardown");
+}
+
+function attachSessions(ws, req, monitor) {
+	// ?cwd= 指定订阅的工作目录；subscribe 时先推一帧，之后随巡检推送变化。
+	let cwd = "";
+	try {
+		cwd = new URL(req.url ?? "/", "http://dsh.internal").searchParams.get("cwd") ?? "";
+	} catch {}
+	const { WebSocket } = getWs();
+	const send = (payload) => {
+		if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 4 * 1024 * 1024) {
+			try {
+				ws.send(JSON.stringify({ type: "sessions", ...payload }));
+			} catch {}
+		}
+	};
+	let unsub = () => {};
+	if (monitor !== null && typeof monitor.watch === "function") {
+		unsub = monitor.watch(cwd, (payload) => send(payload));
+	}
+	ws.on("close", () => unsub());
 }
 
 function attachList(registry, ws, req) {
@@ -1669,6 +2920,75 @@ function attachList(registry, ws, req) {
 	ws.on("error", () => unsubscribe());
 }
 
+function attachTerminal(registry, ws, req, cfg = {}) {
+	try {
+		const url = new URL(req.url ?? "/", "http://dsh.internal");
+		const id = url.searchParams.get("id");
+		const handle = registry.get(id ?? "");
+		if (handle === void 0) {
+			ws.close(1011, "agent not found");
+			return;
+		}
+		const wsInputLimit = Number.isFinite(cfg.wsInputLimit) && cfg.wsInputLimit > 0 ? cfg.wsInputLimit : WS_INPUT_LIMIT;
+		if (handle.transcript !== "") ws.send(handle.transcript);
+		const { WebSocket } = getWs();
+		const onData = (data) => {
+			if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < 4 * 1024 * 1024) ws.send(data);
+		};
+		const onExit = ({ exitCode }) => {
+			onData(`\r\n[dsh-agent-commander] 智能体进程已退出（code ${String(exitCode)}）\r\n`);
+		};
+		const dataSub = handle.pty.onData(onData);
+		const exitSub = handle.pty.onExit(onExit);
+		ws.on("message", (data) => {
+			const text = data.toString("utf8");
+			let control = null;
+			try {
+				const parsed = JSON.parse(text);
+				if (parsed !== null && typeof parsed === "object") control = parsed;
+			} catch {}
+			// Input must be a structured frame {type:"input", data}; bare strings
+			// are dropped (defense in depth — the fence guards the handshake,
+			// this guards the payload). Single-frame size is capped.
+			if (control === null || typeof control.type !== "string") return;
+			if (control.type === "input" && typeof control.data === "string") {
+				if (handle.exited) return;
+				if (control.data.length > wsInputLimit) return;
+				try {
+					handle.pty.write(control.data);
+				} catch {}
+				return;
+			}
+			if (control.type === "resize" && typeof control.cols === "number" && typeof control.rows === "number") {
+				try {
+					handle.pty.resize(Math.max(2, Math.floor(control.cols)), Math.max(2, Math.floor(control.rows)));
+				} catch {}
+				return;
+			}
+			if (control.type === "signal" && typeof control.signal === "string") {
+				if (!registry.allowedSignals.includes(control.signal)) return;
+				try {
+					handle.pty.kill(control.signal);
+				} catch {}
+				return;
+			}
+			if (control.type === "close") {
+				registry.close(handle.id, control.graceful === true);
+				return;
+			}
+		});
+		ws.on("close", () => {
+			dataSub.dispose();
+			exitSub.dispose();
+		});
+		ws.on("error", () => {
+			dataSub.dispose();
+			exitSub.dispose();
+		});
+	} catch (error) {
+		ws.close(1011, error instanceof Error ? error.message : String(error));
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Plugin body — standard cordis Service class form.
@@ -1681,9 +3001,14 @@ function attachList(registry, ws, req) {
 export class AgentCommanderService extends Service {
 	constructor(ctx, config = {}) {
 		super(ctx, "agentCommander");
+		this.nodePty = loadNodePty();
+		ensureSpawnHelper();
 		// The agent-commander skill rides inside this bundle; make it available
 		// to ~/.agents/skills so the model picks it up (best-effort, no-clobber).
 		ensureBundledSkillInstalled();
+		if (this.nodePty === null) {
+			ctx.logger?.warn?.("[dsh-agent-commander] node-pty unavailable — agent spawn disabled");
+		}
 		// Mount into the framework (official plugin mechanism): contribute a
 		// global system-prompt section so EVERY conversation — new windows and
 		// fresh sessions included — knows the team-agent capability exists and
@@ -1691,21 +3016,23 @@ export class AgentCommanderService extends Service {
 		// bare tool schemas and never learns the workflow (reported: 新对话里
 		// 不知道怎么找到智能体、怎么操作智能体). The registration is auto-disposed
 		// when the plugin unloads, per the Cordis lifecycle.
-		try {
-			ctx.systemPrompt.section({
-				name: "dsh-agent-commander:team",
-				order: 150,
-				text: [
-					"团队智能体（Agent Radar）：",
-					"右侧「智能体雷达」面板管理真实智能体（claude / opencode / codex 走 herdr kind；codebuddy 无 herdr kind，由插件在 herdr 面板里建 pane 并直接输入命令启动，同一套 pane 操作）：",
-					"1. 先用 agent_list 查看已打开（运行中）的智能体（含 id、引擎、状态、工作目录）；agent_open 会启动智能体并自动完成整个新建流程：herdr 建 pane → 输入启动命令 → 监控 pane 输出 → 自动应答启动期确认弹窗（文件夹信任等，该点 yes 时自动点 yes）→ 注入角色/技能简报 → 验证简报在会话文件里落地后才算创建完成。",
-					"2. 会话历史（cc-switch 式）：GET /agent-commander/api/sessions?cwd=<目录> 可列出本工作区四引擎的历史会话（时间/ID/标题/token），POST /sessions/restore 恢复、DELETE /sessions/:engine/:id 删除。",
-					"3. agent_send 派发任务（submit=true 回车）；agent_broadcast 并行派发；agent_read 对 herdr 面板返回可见输出（paneRead），结果以会话历史为准。",
-					"4. agent_approve 确认权限提问；agent_signal 发中断（kill）；agent_close 关闭（优雅退出→关 pane）。",
-					"5. 团队共享记忆：项目 .deepseek/ 下 memory.md、task-board.md、experience.md、handoffs/ 与 SQLite 记忆库 memory.db；智能体开工先读、完成后回写。"
-				].join("\n")
-			});
-		} catch {}
+		if (this.nodePty !== null) {
+			try {
+				ctx.systemPrompt.section({
+					name: "dsh-agent-commander:team",
+					order: 150,
+					text: [
+						"团队智能体（Agent Radar）：",
+						"右侧「智能体雷达」面板管理真实终端智能体（claude / opencode / codex 等），你可以直接指挥它们：",
+						"1. 先用 agent_list 查看已打开的智能体（含 id、引擎、状态、工作目录）；当前工作区没有时会自动列出其他工作区的智能体，跨窗口/跨会话同样可见可操作。",
+						"2. agent_open 新建（type/name/role/skills/cwd）；角色与技能会作为开场简报在启动完成后自动注入并回车执行。",
+						"3. agent_send 派发任务（submit=true 会按回车执行）；agent_broadcast 把同一任务并行派给多个智能体做协同；agent_read 轮询输出直到完成。",
+						"4. agent_approve 确认权限提问；agent_signal 发中断；agent_close 关闭（先优雅 /exit，再升级 SIGINT/SIGKILL）。",
+						"5. 团队共享记忆：项目 .deepseek/ 下 memory.md、task-board.md、experience.md、handoffs/ 与 SQLite 记忆库 memory.db；智能体开工先读、完成后回写。"
+					].join("\n")
+				});
+			} catch {}
+		}
 		// Normalize the validated config (the loader already filled schema
 		// defaults, but the class must stay robust when driven directly).
 		this.cfg = {
@@ -1716,15 +3043,10 @@ export class AgentCommanderService extends Service {
 			allowedSignals: Array.isArray(config.allowedSignals) && config.allowedSignals.length > 0 ? config.allowedSignals : [...ALLOWED_SIGNALS],
 			rolePresets: Array.isArray(config.rolePresets) && config.rolePresets.length > 0 ? config.rolePresets : [...ROLE_PRESETS],
 			baseCwd: typeof config.baseCwd === "string" && config.baseCwd !== "" ? config.baseCwd : process.cwd(),
-			memoryDir: typeof config.memoryDir === "string" && config.memoryDir !== "" ? config.memoryDir : MEMORY_DIR,
-			terminalApp: ["terminal", "ghostty", "iterm2"].includes(config.terminalApp) ? config.terminalApp : "auto"
+			memoryDir: typeof config.memoryDir === "string" && config.memoryDir !== "" ? config.memoryDir : MEMORY_DIR
 		};
 		this.baseCwd = this.cfg.baseCwd;
 		this.memoryDir = this.cfg.memoryDir;
-		// 会话历史（cc-switch 式）：四引擎历史会话扫描 / 删除。保留本版实现。
-		this.scanner = new SessionScanner();
-		this.terminalApp = this.cfg.terminalApp;
-		this.terminalLabel = new TerminalLauncher(this.cfg.terminalApp).label;
 		// 项目根目录 = 创建智能体时所在会话的工作目录。所有智能体配置收拢到
 		// 项目根 <memoryDir>/agents.json（即使智能体 cwd 是子目录），保证配置
 		// 都在用户所指的项目根目录下。
@@ -1744,62 +3066,37 @@ export class AgentCommanderService extends Service {
 		this.stores = new Map();
 		this.baseStore = new MemoryStore(this.baseCwd, this.memoryDir);
 		this.stores.set(this.baseCwd, this.baseStore);
-		const commonOpts = {
-			maxAgents: this.cfg.maxAgents,
+		this.sessionScanner = new SessionScanner();
+		this.registry = new AgentRegistry(this.nodePty, this.cfg.maxAgents, this.baseCwd, (cwd) => this.storeFor(cwd), (handle) => this.projectRootOf(handle), {
 			transcriptLimit: this.cfg.transcriptLimit,
 			allowedSignals: this.cfg.allowedSignals,
-			memoryDir: this.memoryDir,
-			baseCwd: this.baseCwd,
-			onSpawn: (cwd) => {
-				try {
-					seedSharedMemory(cwd, this.memoryDir);
-				} catch {}
-			}
-		};
-		// 智能体宿主：herdr（tmux pane 接管终端，会话即窗口）优先，不可用回退
-		// 系统终端窗口（Terminal/Ghostty）。agentHost=herdr 强制 herdr，失败报错。
-		// codebuddy 没有 herdr kind → 永远走系统终端宿主（组合注册表按引擎路由）。
-		// （探测为同步 findBinary；server 可用性由 HerdrAgentRegistry 内部自检。）
-		this.agentHost = "terminal-host";
-		this.herdrAdapter = null;
-		this.herdrRegistry = null;
-		// 系统终端宿主总是创建：herdr 模式下专门承接 codebuddy。
-		this.terminalRegistry = new TerminalAgentRegistry({ ...commonOpts, terminalApp: this.cfg.terminalApp });
-		const herdrBinary = HerdrAdapter.findBinary();
-		const wantHerdr = this.cfg.agentHost === "herdr" || (this.cfg.agentHost !== "terminal-host" && herdrBinary !== null);
-		if (wantHerdr && herdrBinary !== null) {
-			this.herdrAdapter = new HerdrAdapter(herdrBinary);
-			this.herdrRegistry = new HerdrAgentRegistry(this.herdrAdapter, {
-				...commonOpts,
-				scanner: this.scanner
-			});
-			this.agentHost = "herdr";
-			this.herdrAdapter.selftest().then((r) => {
-				if (!r.ok) ctx.logger?.warn?.(`[dsh-agent-commander] herdr 自检未通过（${r.reason}），herdr 智能体操作可能失败；codebuddy 仍走系统终端`);
-			}).catch(() => {});
-			this.registry = new CompositeRegistry({
-				herdr: this.herdrRegistry,
-				terminal: this.terminalRegistry,
-				herdrKinds: HERDR_KIND_MAP
-			});
-		} else if (this.cfg.agentHost === "herdr") {
-			throw new Error("agentHost=herdr 但未找到 herdr 二进制（~/.local/bin/herdr 或 PATH）");
-		} else {
-			this.registry = new CompositeRegistry({
-				herdr: null,
-				terminal: this.terminalRegistry,
-				herdrKinds: {}
-			});
-		}
-		ctx.logger?.info?.(`[dsh-agent-commander] agent host = ${this.agentHost}${this.agentHost === "herdr" ? "（tmux pane，会话即窗口）" : `（系统终端 ${this.terminalLabel}）`}`);
+			memoryDir: this.memoryDir
+		});
 		const fence = (req) => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts);
 		const resolveCwd = (sessionId) => sessionCwdOf(ctx, sessionId);
-		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd, this.cfg, this.scanner);
-		registerWebsockets(ctx, this.registry, fence, this.cfg);
+		const monitorInterval = Number.isFinite(this.cfg.monitorIntervalMs) && this.cfg.monitorIntervalMs > 0
+			? Math.trunc(this.cfg.monitorIntervalMs)
+			: MONITOR_INTERVAL_MS;
+		this.sessionMonitor = new SessionMonitor({
+			registry: this.registry,
+			scanner: this.sessionScanner,
+			intervalMs: monitorInterval,
+			logger: ctx.logger
+		});
+		registerApi(ctx, this.registry, (cwd) => this.storeFor(cwd), fence, resolveCwd, this.cfg, this.sessionScanner);
+		registerWebsockets(ctx, this.registry, fence, this.cfg, this.sessionMonitor);
 		let toolsDisposers = null;
-		toolsDisposers = registerTools(ctx, this.registry, (cwd) => this.storeFor(cwd), resolveCwd);
+		if (this.nodePty !== null) {
+			toolsDisposers = registerTools(ctx, this.registry, (cwd) => this.storeFor(cwd), resolveCwd);
+		}
+		// Restore agents that were open before the app restarted (state saved in
+		// <memoryDir>/agents.json on shutdown).
+		if (this.nodePty !== null) {
+			this.registry.restoreState();
+		}
 		ctx.effect(() => () => {
 			toolsDisposers?.();
+			// shutdown(): save live state for the NEXT boot, then kill PTYs.
 			this.registry.shutdown();
 			for (const store of this.stores.values()) store.close();
 		}, "dsh-agent-commander: teardown");
@@ -1821,59 +3118,38 @@ export class AgentCommanderService extends Service {
 		return this.registry.list();
 	}
 	/** Open a new agent; returns its meta. */
-	async open(opts) {
-		const handle = await this.registry.create(opts);
+	open(opts) {
+		const handle = this.registry.create(opts);
 		return this.registry.meta(handle);
 	}
 	/** Send text to an agent (submit=true presses Enter). */
-	async send(id, text, submit) {
-		await this.registry.send(id, text, submit === true);
+	send(id, text, submit) {
+		this.registry.send(id, text, submit === true);
 		return { id };
 	}
 	/** Read an agent's recent output (ANSI-stripped). */
-	async read(id, bytes) {
+	read(id, bytes) {
 		return this.registry.read(id, bytes);
 	}
 	/** Click-confirm a prompt (default choice "1" = Yes). */
-	async approve(id, choice) {
-		await this.registry.approve(id, choice);
+	approve(id, choice) {
+		this.registry.approve(id, choice);
 		return { id };
 	}
 	/** Send a whitelisted signal (SIGINT/SIGTSTP/SIGTERM). */
-	async signal(id, signal) {
-		await this.registry.signal(id, signal);
+	signal(id, signal) {
+		this.registry.signal(id, signal);
 		return { id };
 	}
 	/** Close an agent (graceful = ask it to /exit first). */
-	async close(id, graceful) {
-		await this.registry.close(id, graceful === true);
+	close(id, graceful) {
+		this.registry.close(id, graceful === true);
 		return { id };
 	}
 	/** Get one agent's live status/meta (null when unknown). */
 	status(id) {
 		const handle = this.registry.get(id);
 		return handle === void 0 ? null : this.registry.meta(handle);
-	}
-	/** 会话历史（cc-switch 式）：列出某工作目录的全部会话。 */
-	sessions(cwd) {
-		return this.scanner.list(cwd);
-	}
-	/** 恢复一个历史会话（拉起系统终端）。 */
-	restoreSession(opts) {
-		return this.registry.restoreSession(opts);
-	}
-	/** 删除一个历史会话。 */
-	deleteSession(engine, id, cwd) {
-		return this.scanner.deleteSession(engine, id, cwd);
-	}
-	/** 终端软件信息。 */
-	terminalStatus() {
-		return {
-			app: this.registry.launcher?.resolveApp?.() ?? "terminal",
-			label: this.registry.launcher?.label ?? "Terminal.app",
-			apps: TerminalLauncher.detectAll(),
-			engines: ENGINE_TYPES.map((e) => ({ id: e, installed: this.registry.binaries?.[e] != null }))
-		};
 	}
 	/** SQLite memory layer access (shared knowledge base, routed per project cwd). */
 	memory = {
@@ -1891,9 +3167,7 @@ export class AgentCommanderService extends Service {
 			allowedSignals: this.registry.allowedSignals,
 			rolePresets: this.cfg.rolePresets,
 			baseCwd: this.baseCwd,
-			memoryDir: this.memoryDir,
-			terminalApp: this.cfg.terminalApp,
-			terminalLabel: this.terminalLabel
+			memoryDir: this.memoryDir
 		};
 	}
 }

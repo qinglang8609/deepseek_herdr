@@ -47,7 +47,7 @@
 dsh plugin add github:qinglang8609/deepseek_herdr
 
 # 或锁定到发布 tag
-dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.1
+dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.2
 ```
 
 > 首次安装若提示 `ERR_PNPM_IGNORED_BUILDS`（node-pty 构建脚本），在 profile 目录
@@ -57,7 +57,7 @@ dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.1
 
 ```bash
 cd plugin && pnpm pack
-dsh plugin --profile web add ./dsh-agent-commander-0.2.1.tgz
+dsh plugin --profile web add ./dsh-agent-commander-0.2.2.tgz
 ```
 
 ### 方式三：一键脚本（自动标准流程 + 回退）
@@ -75,26 +75,10 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 
 1. 重启后，右侧「智能体雷达」面板自动打开（主界面右上角有悬浮「🤖 雷达」按钮可弹出/收起）
 2. 点「＋ 新建」→ 选引擎、写角色（如"数据库专家"）、勾选技能 → 创建
-3. 点击智能体行展开实时输出（只读 tail + 发送框），直接下达指令
+3. 点击智能体行展开**实时终端**（xterm + WebSocket），直接打字下达指令
 4. 对 DeepSeek 说：
    > "用 agent_open 打开一个 opencode，角色定为前端专家，派它修复 xx 页面的样式问题"
 5. 切换工作区时，雷达会自动重新检测新文件夹的智能体列表
-
-## 🛰 herdr 集成（智能体宿主迁移）
-
-默认（`agentHost: auto`）当检测到 herdr 已安装时，智能体不再由本插件的 node-pty
-进程托管，而是跑在 **herdr 后台 server** 里 —— 断开/重启/页面卡死都不丢进程，
-总指挥通过 `herdr` CLI 走 socket API 监控协作，根治「侧边栏窗口小、长跑卡死」：
-
-- 头部显示宿主徽标 `herdr v0.8.2`（未检测到则显示「本地进程」）
-- 侧边栏监控 **与当前工作区一致的 herdr 空间**（`空间 wD` 标签；无则新建时自动创建）
-- 新建智能体 = 确保 herdr 空间 → 按面板数交替 split 排版 → `agent start` →
-  注入角色/技能简报（等 agent 就绪后自动回车执行）
-- 智能体终端改为**只读 tail（纯文本，非 xterm）** + 发送框，长会话不再卡
-- 支持的引擎：claude / opencode / codex / qwen / pi（herdr kinds；需
-  `herdr integration install <kind>` 装上状态上报集成）
-
-> 设计文档：`docs/herdr-integration-dev.md` ｜ 不想用 herdr 可设 `agentHost: "legacy"` 回退 node-pty 模式。
 
 ## ⚙️ 配置（Config schema）
 
@@ -104,13 +88,20 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 - id: agent-commander
   config:
     maxAgents: 12              # 同时打开的最大智能体数（默认 8）
-    agentHost: auto            # auto | herdr | legacy（智能体宿主，默认 auto 优先 herdr）
+    transcriptLimit: 2097152   # 每个智能体转录环上限字节（默认 1048576 = 1 MiB，示例为 2 MiB）
     rolePresets:
       - 数据库专家
       - 安全专家              # 自定义预设会出现在「新建智能体」弹窗里
     memoryDir: .deepseek       # 共享记忆目录名（默认 .deepseek）
     allowedSignals: [SIGINT, SIGTSTP, SIGTERM]
+    baseCwd: /path/to/project  # 无会话工作目录时的默认项目根
+    monitorIntervalMs: 30000   # 会话定时监控间隔（毫秒，默认 30000；0 = 关闭）
 ```
+
+**会话定时监控**：服务端按 `monitorIntervalMs` 巡检当前工作区的会话状态
+（运行中 / 启动中 / 已退出 / 空闲），仅在状态变化时经 WebSocket 推送，雷达
+面板静默替换列表 —— 不弹提示、不闪 loading。面板顶部一行显示「定时监控 ·
+每 30秒 巡检 · 已同步 15:04:05」。
 
 完整字段表见 [plugin/README.md](plugin/README.md#配置config-schema)。
 
@@ -131,11 +122,12 @@ git commit `release: vX.Y.Z` + tag → 输出发布清单（push remote + `dsh p
 ```
 plugin/
 ├── lib/
-│   ├── index.js          # node 端：Config schema + AgentRegistry(legacy) + 共享记忆 + agent_* 工具 + WS/HTTP 路由
-│   ├── herdr-adapter.js  # herdr CLI 封装（binary 发现 / probe / JSON 信封 / 错误分类 / 超时）
-│   ├── herdr-registry.js # herdr 宿主注册表门面（与 AgentRegistry 同接口，供 agent_* 工具/API/WS 消费）
+│   ├── index.js          # node 端：Config schema + AgentRegistry(node-pty) + 共享记忆 + agent_* 工具 + WS/HTTP 路由
+│   ├── session-scanner.js # 四引擎会话历史扫描（claude/opencode/codex/codebuddy）
+│   ├── session-monitor.js # 会话定时监控：会话列表构建 + 按 monitorIntervalMs 巡检（变化才推送）
 │   └── client.js         # client bundle（构建产物，勿手改）
-├── src/client/           # client 源码（app.js 雷达面板 / panel.css；无 xterm，只读 tail 渲染）
+├── src/client/           # client 源码（app.js 雷达面板 / panel.css；vendored xterm 终端小窗）
+│   └── vendor/           # 内联的 xterm + addon-fit + xterm.css
 ├── skill/agent-commander/skill.md  # 总指挥 skill（随插件包分发，启动时自动装到 ~/.agents/skills/）
 ├── scripts/build-client.mjs  # 组装 client.js
 ├── cordis.patch.yml      # 激活补丁
@@ -161,6 +153,7 @@ node 端实现为 **cordis Service 类**（`AgentCommanderService`），其他�
 
 | 版本 | 内容 |
 |------|------|
+| **v0.2.2** | （未发布）终端宿主重构：**移除 herdr 三件套**（herdr-adapter / herdr-registry / composite-registry）与 `docs/` 两个相关设计文档、失效测试 `plugin/test/herdr-e2e.mjs`；宿主统一为**node-pty 网页终端**（xterm + WebSocket 实时输出）；雷达改**两段独立展示**（「运行中」= 活跃终端 /「会话历史」= 四引擎持久会话）；新增 `/ws/terminal` 终端流、`SessionScanner`(四引擎扫描) + `SessionMonitor`(定时巡检)；`buildSessionList` 历史只做 running 精确标注（未命中历史会话的运行窗口合成精确 `live:` 卡片，引擎写入首条消息后自动消失） |
 | **v0.2.1** | 修复 4 CRITICAL + 5 HIGH（渲染期 ref 副作用 / WebSocket 泄漏 / 竞态 / prompt 注入 / schema 文档不一致 / VACUUM 吞错 / resize 节流 / busy 未重置）+ 状态卡死专项（周期巡检 idle 回落）；支持 `dsh plugin add github:...` 直接安装 |
 | **v0.2.0** | 插件标准化：Config schema、tarball 标准安装、skill 随包分发、SQLite 记忆层、依赖解析兜底 |
 

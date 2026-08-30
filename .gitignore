@@ -1,6 +1,7 @@
-.omo/*
+.omo/**
 .claude/*
-.deepseek/*
+.deepseek/**
+.codegraph/**
 .DS_Store
 dist/
 *.tgz

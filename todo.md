@@ -1,38 +1,37 @@
+# dsh-agent-commander — 任务 / 演进记录
 
----
+> 当前分支：feat/terminal-host（工作区已含 v0.4 方向改动，未提交、未发布）。
 
-## herdr 集成迁移（feat/herdr-adapter 分支）
+## 当前架构决定（v0.4 方向）
 
-- [x] 能力对照：herdr 覆盖创建/监控/状态/下命令/回车，claude+codex+opencode 集成已装
-- [x] 开发文档 docs/herdr-integration-dev.md（架构、概念映射、模块设计、风险）
-- [x] plugin/lib/herdr-adapter.js —— herdr CLI 封装（binary 发现/probe/JSON 信封/错误分类/超时）
-- [x] plugin/lib/herdr-registry.js —— 注册表门面（同接口：create/list/read/send/approve/signal/close/compact + 轮询）
-- [x] lib/index.js 接线 —— Config.agentHost(auto/herdr/legacy) + 构造器双宿主 + tools/API/WS async 化 + herdr 只读 tail 终端
-- [x] E2E 全链路通过（test/herdr-e2e.mjs）：workspace 自动创建 → split → agent start → 简报注入 → 状态流转 → 派活 → 收结果 → 优雅关闭
-- [ ] 前端改造（阶段 B）：删 xterm、只读 tail + 发送框、workspace 分组、新建弹窗引擎改 herdr kinds
-- [ ] herdr-commander skill 沉淀（herdr 命令 + 记忆协议封装）
-- [ ] 重启 DSH 后真机验证 agent_* 工具 + 侧边栏（需重新构建插件 client 并安装）
+- **herdr 已整体移除**：删除 `plugin/lib/herdr-adapter.js`、`herdr-registry.js`、`composite-registry.js` 及测试 `plugin/test/herdr-e2e.mjs`（它仍 import 已删除的 herdr 模块，无法运行）；宿主统一为 **node-pty 网页终端**（`index.js` 内联 `AgentRegistry` 直接 `node-pty` spawn，无 agentHost 切换字段）。
+- **默认宿主 = node-pty 网页终端**（`index.js` 内联 `AgentRegistry` 直接 node-pty spawn；曾新增的 `plugin/lib/pty-registry.js`、`log.js` 未被 index.js 接入，已在本轮清理中删除）：node-pty 拉起子进程，handle 带 `.pty` + `.transcript`；create 自动应答启动弹窗 + 注入/验证角色简报；`agent_read` 返回真实终端输出。
+- **雷达两段独立展示**：
+  - **运行中** = 当前开着的终端（来自 `/agents` 实时列表，node-pty 活跃进程；新开 agent 无会话 ID 也立刻显示）。点开 → xterm 终端小窗（`/agent-commander/ws/terminal` 流式）。
+  - **会话历史** = 纯历史（`session-scanner` 四引擎 + `session-monitor` 巡检 + `/sessions` 恢复/删除）。运行中的窗口只在匹配的历史行上标 `running`；未命中历史会话的运行窗口合成精确 `live:` 卡片（引擎写入首条消息后自动消失）。
 
-### herdr 集成（续，feat/herdr-adapter 分支第二阶段）
-- [x] 后端：/herdr/status + /herdr/workspace API、/config 增加 herdrMode/herdrVersion/herdrKinds
-- [x] HerdrAgentRegistry.findWorkspace()（只查不建）+ 新建面板交替排版（right/down 网格）
-- [x] 前端：TailView 纯文本只读 tail 替代 xterm（bundle 457KB→70KB）、详情发送框、
-      SIGINT 改 REST、herdr 宿主徽标 + 当前工作区 herdr 空间标签
-- [x] 新建弹窗：herdr kinds 引擎列表 + herdr 空间状态提示（不存在自动新建）
-- [x] 清理：移除 xterm vendor 与死 CSS、删除 test/herdr-debug.mjs、tgz 产物改 dist/(gitignore)
-- [x] 发布流程：scripts/release.mjs（构建→升版本→pack→commit+tag→清单；pnpm 失败回退 npm）
-- [ ] 重启 DSH 真机验证：侧边栏 herdr 徽标/空间标签/新建流程/只读 tail + 发送框
-- [ ] 合并 feat/herdr-adapter → main，`node scripts/release.mjs patch` 发布 v0.2.3
+## 待办 / 下一步
 
----
+- [ ] 真机验证（重启 DSH）：node-pty 新建 → 自动启动确认 + 简报注入验证落地；点开「运行中」→ xterm 小窗实时输出；新建但未说话的 agent 即时入「运行中」；历史恢复/删除。
+- [ ] 验证 `/agent-commander/ws/terminal` 终端流（input/resize/signal/close）与「非详情页不流式渲染」的省内存设计。
+- [ ] 清理文档遗留引用：`docs/terminal-host-dev.md` / `docs/herdr-integration-dev.md` 已删除，确认 README / plugin/README 无指向这些文件的失效链接（README 已同步去除 herdr 章节，plugin/README 无引用）。
+- [ ] 发布 v0.4（`node scripts/release.mjs patch`；发布前先 `pnpm approve-builds` 放行 node-pty）。
 
-## 终端宿主模式（feat/terminal-host 分支，v0.3 方向）
-- [x] P1：terminal-launcher（open 拉起 Terminal/Ghostty/iTerm + pidfile 捕获 PID，已验证）
-      + process-monitor（kill -0 存活）+ keystroke（System Events 按键注入）
-- [x] P1：terminal-registry（create 拉起→2s 轮询灰/绿；send/approve 按键；signal=kill；restoreSession）
-- [x] P2：session-scanner 四引擎（claude jsonl/opencode db/codex rollout/codebuddy；实测 42 会话）
-- [x] P2：/terminal/status + /sessions + restore/delete API；移除 herdr/legacy（index.js 2850→1693 行）
-- [x] P3：雷达 UI 重写（运行中 + 会话历史，子代理完成，bundle 71783B）
-- [x] 安装目录已同步（client.js 71783B + 新模块）
-- [ ] 真机验证（重启 DSH）：新建→终端窗口→简报注入；会话历史恢复/删除；辅助功能授权
-- [ ] 发布 v0.3（node scripts/release.mjs patch）
+## 已完成的 v0.4 改动（本次工作区）
+
+- [x] 新增 `plugin/lib/session-monitor.js`；`pty-registry.js` / `log.js` 曾新增但未被 index.js 接入，本轮清理已删除。
+- [x] `index.js`：内联 `AgentRegistry` 直接 `node-pty` spawn（去掉 agentHost 切换、去掉 herdr/composite）；新增 `/agent-commander/ws/terminal` 终端流 WS + `attachTerminal`（`pty.onData`→ws，input/resize/signal/close 写回）；系统提示改 node-pty 描述。
+- [x] `session-monitor.js`：`buildSessionList` 历史只做 running 精确标注；未命中历史会话的运行窗口合成精确 `live:` 卡片。
+- [x] 客户端 `plugin/src/client/`：恢复 vendored `xterm.inline.js`+`xterm.css`；`build-client.mjs` 注入 xterm；新增 `AgentTerminal`（xterm+WS 终端小窗，仅详情页创建）；`TerminalDetail` 改用 xterm；雷达改两节 `RunningSection`（运行中）+ `SessionsSection`(会话历史)。
+- [x] `plugin/lib/client.js` 重建（471019 字节，含 vendored xterm）。
+- [x] 删除 herdr 三件套；`plugin/README.md` Config 表已同步（无 agentHost 字段，herdr 宿主描述已移除）。
+- [x] 全部 lib 模块 `node --check` 通过；pty 注册表方法面 smoke test 通过。
+
+## 真机验证发现的 bug（待修，用户反馈）
+
+- [ ] 新建智能体没有注入提示词（`plugin/src/client/app.js` 创建流程：新建后角色/技能简报未生效）。
+- [ ] 会话历史没有显示当前会话的卡片：新建智能体时若未对话，无会话缓存，卡片不出现。
+- [ ] 会话历史与窗口未绑定：在 claude 里说句话刷新后，历史已有会话卡片但不显示「正在运行中」。
+- [ ] 会话历史点击恢复失败：`Cannot read properties of undefined (reading 'claude')`，不能恢复对话。
+- [ ] 智能体卡片上去掉 `#55576 · ws:7cfb4590-...` 这类无用信息显示。
+- [ ] 智能体上面的刷新按钮点击执行的是 `/clear` 命令而不是 `/refresh` 命令。

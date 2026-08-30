@@ -1,6 +1,7 @@
 // ============================================================================
 // Build the single-file client bundle: lib/client.js
-//   head.js + panel css injection + app.js + tail.js
+//   head.js + xterm css injection + panel css injection + vendored xterm +
+//   app.js + tail.js
 //
 // Run with the bundled Electron-as-node:
 //   ELECTRON_RUN_AS_NODE=1 "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" scripts/build-client.mjs
@@ -14,6 +15,9 @@ const src = join(root, "src", "client");
 const out = join(root, "lib", "client.js");
 
 const head = readFileSync(join(src, "head.js"), "utf8");
+const vendor = readFileSync(join(src, "vendor", "xterm.inline.js"), "utf8");
+// xterm.css is already a JS double-quoted string body (escapes preserved).
+const xtermCssBody = readFileSync(join(src, "vendor", "xterm.css"), "utf8");
 const panelCss = readFileSync(join(src, "panel.css"), "utf8");
 const app = readFileSync(join(src, "app.js"), "utf8");
 const tail = readFileSync(join(src, "tail.js"), "utf8");
@@ -38,7 +42,10 @@ function cssInjection(tagId, quotedLiteral, varName) {
 const parts = [
 	head,
 	"",
+	cssInjection("dsh-agent-commander/xterm.css", `"${xtermCssBody}"`, "xtermCss"),
 	cssInjection("dsh-agent-commander/panel.css", JSON.stringify(panelCss), "panelCss"),
+	vendor,
+	"",
 	app,
 	"",
 	tail

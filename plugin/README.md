@@ -11,7 +11,7 @@
 │ │ 你 ↔ DeepSeek(总指挥) │  │  claude  working│ │
 │ └──────────────────────┘  │  opencode idle  │ │
 │                            │  点击→实时终端   │ │
-│                            │  ＋新建(角色+技能)│ │
+│                            │  ＋新建(角色)     │ │
 │                            └──────────────┘ │
 └────────────────────────────────────────────┘
 ```
@@ -34,11 +34,10 @@
   **不再保存 transcriptTail**（原始终端字节是乱码，对恢复毫无用处）
 - **新建智能体弹窗**：选择引擎（claude / opencode / codex，自动检测已安装项）、
   命名、**角色定义**（内置预设：数据库专家 / 设计专家 / 前端专家 / 测试专家 /
-  代码审查专家 / 架构师，也可自定义）、**挂载技能**（`~/.agents/skills/*`）、
-  工作目录 —— 角色与技能会作为开场简报注入该智能体
+  代码审查专家 / 架构师，也可自定义）、工作目录 —— 角色会作为开场简报注入该智能体
 - **DeepSeek 指挥工具**：`agent_open` / `agent_list` / `agent_read` /
-  `agent_send` / `agent_signal` / `agent_close`，总指挥可开智能体、派活、收结果
-  （`agent_list` 只返回**当前工作区**的智能体）
+  `agent_send` / `agent_broadcast` / `agent_signal` / `agent_close`，总指挥可开
+  智能体、派活、并行协同、收结果（`agent_list` 只返回**当前工作区**的智能体）
 - **共享记忆协议**：开智能体时自动在工作目录播种
   `.deepseek/memory.md`（长期记忆）、`.deepseek/task-board.md`（任务进度）、
   `.deepseek/experience.md`（工作经验沉淀：结果 / 教训 / 踩坑 / 复用模式）、
@@ -56,7 +55,7 @@
 dsh plugin add github:qinglang8609/deepseek_herdr
 
 # 或锁定到发布 tag
-dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.1
+dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.2
 ```
 
 > 首次安装若提示 node-pty 构建脚本被忽略（`ERR_PNPM_IGNORED_BUILDS`），在 profile 目录
@@ -71,7 +70,7 @@ dsh plugin add github:qinglang8609/deepseek_herdr#v0.2.1
 ```bash
 # 从本仓库目录：先打发布 tarball（已附在仓库 plugin/ 下），再标准安装：
 cd plugin && pnpm pack
-dsh plugin --profile web add ./dsh-agent-commander-0.2.1.tgz
+dsh plugin --profile web add ./dsh-agent-commander-0.2.2.tgz
 ```
 
 > **为什么用 tarball 而不是 `dsh plugin add ./plugin`？** 目录安装会被 pnpm 按
@@ -127,6 +126,7 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
     memoryDir: .deepseek       # 共享记忆目录名（默认 .deepseek）
     allowedSignals: [SIGINT, SIGTSTP, SIGTERM]
     baseCwd: /path/to/project  # 无会话工作目录时的默认项目根
+    monitorIntervalMs: 30000   # 会话定时监控间隔（0 = 关闭）
 ```
 
 | 字段 | 类型 | 默认 | 说明 |
@@ -139,7 +139,13 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 | `rolePresets` | string[] | 6 个内置预设 | 「新建智能体」弹窗的角色预设 |
 | `baseCwd` | string | "" | 无会话工作目录时的默认项目根（空=进程 cwd） |
 | `memoryDir` | string | ".deepseek" | 共享记忆目录名（memory.md / task-board.md / agents.json / memory.db 等） |
-| `agentHost` | "auto" \| "herdr" \| "legacy" | "auto" | 智能体宿主：auto 检测到 herdr 二进制即用 herdr；herdr 强制 herdr；legacy 回退 node-pty（详见 `docs/herdr-integration-dev.md`） |
+| `monitorIntervalMs` | number | 30000 | 会话定时监控间隔（毫秒）：服务端按此间隔巡检各被订阅工作目录的会话状态，状态变化才经 `/ws/sessions` 推送，客户端静默刷新；`0` = 关闭定时巡检（订阅时仍推一帧） |
+
+> **会话历史**（不属于 config 字段，内置）：四引擎持久会话（claude/opencode/codex/codebuddy）
+> 经 `SessionScanner` 扫描 → `/sessions`（GET 列表 / POST restore / DELETE `:engine/:id`）
+> + `/ws/sessions` 推送；与「运行中」列表独立展示、可重叠。恢复走 node-pty
+> resume（网页终端）。herdr / terminal-host 宿主已移除，仅保留 node-pty
+> （网页终端实时输出）。
 
 运行时配置快照还通过 `GET /agent-commander/api/config` 暴露给客户端（角色预设、
 引擎列表、限额），客户端「新建智能体」弹窗会优先使用服务端配置的 `rolePresets`。
@@ -149,7 +155,7 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 按官方打包教程（publish.md），插件可分发为：
 
 - **tarball（无需构建权限，推荐）**：在 `plugin/` 下执行 `pnpm pack`，得到
-  `dsh-agent-commander-0.2.0.tgz`；用户 `dsh plugin add ./dsh-agent-commander-0.2.0.tgz`。
+  `dsh-agent-commander-0.2.2.tgz`；用户 `dsh plugin add ./dsh-agent-commander-0.2.2.tgz`。
 - **git 安装**：`dsh plugin add github:qinglang8609/deepseek_herdr`（仓库根目录需是
   插件包根；本仓库插件在 `plugin/` 子目录，因此推荐 tarball 或 `dsh plugin add ./plugin`）。
   git 安装拉的是源码，靠 `package.json` 的 `prepare` 脚本构建 client bundle；
@@ -162,7 +168,7 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 2. 主界面右上角有悬浮的「🤖 雷达」按钮：侧边栏收起时点它**弹出侧边栏**；
    展开时它自动停靠在侧边栏左缘（圆形 🤖），可再点收起 —— 新建空白会话后
    侧边栏若被应用收起，也会自动恢复（或点按钮弹出）
-3. 点「＋ 新建」→ 选引擎、写角色（如"数据库专家"）、勾选技能 → 创建
+3. 点「＋ 新建」→ 选引擎、写角色（如"数据库专家"）→ 创建
 4. 点击智能体行展开实时终端，直接和它对话
 5. 对 DeepSeek 说："用 agent_open 打开一个 opencode，角色定为前端专家，
    派它修复 xx 页面的样式问题"，DeepSeek 会按 `agent-commander` skill 指挥团队
@@ -176,6 +182,8 @@ bash install.sh            # 默认 profile: web；优先走 dsh plugin add 标�
 plugin/
 ├── lib/
 │   ├── index.js          # node 端：Config schema + AgentRegistry + 共享记忆播种 + agent_* 工具 + WS/HTTP 路由
+│   ├── session-scanner.js # 四引擎会话历史扫描（claude/opencode/codex/codebuddy）
+│   ├── session-monitor.js # 会话定时监控：会话列表构建 + 按 monitorIntervalMs 巡检（变化才推送）
 │   └── client.js         # client bundle（构建产物，勿手改）
 ├── src/client/           # client 源码
 │   ├── head.js / tail.js # bundle 骨架

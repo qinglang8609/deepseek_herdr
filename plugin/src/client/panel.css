@@ -182,7 +182,7 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	justify-content: center;
 	align-items: center;
 	gap: 6px;
-	min-height: 96px;
+	min-height: 120px;
 	flex-direction: column;
 	display: flex;
 	padding: 16px;
@@ -190,24 +190,55 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_emptyHint {
 	opacity: 0.85;
 }
+.dhac_agent {
+	border: 1px solid transparent;
+	cursor: pointer;
+	text-align: left;
+	background: none;
+	width: 100%;
+	border-radius: 8px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 2px;
+	margin: 2px 0;
+	padding: 6px 8px;
+	display: flex;
+}
+.dhac_agent:hover {
+	background: var(--dsw-alias-interactive-bg-hover);
+}
+.dhac_agentActive {
+	background: var(--dsw-alias-interactive-bg-active);
+	border-color: var(--dsw-alias-border-l1);
+}
+.dhac_agentTop {
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	display: flex;
+}
 .dhac_statusDot {
 	border-radius: 50%;
 	flex: none;
 	width: 7px;
 	height: 7px;
 }
-/* 运行中绿 / 启动中黄 / 已退出灰（终端宿主模式） */
 .dhac_statusDot[data-status="working"] {
-	background: var(--dsw-alias-state-success-primary);
-	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent);
-}
-.dhac_statusDot[data-status="starting"] {
-	background: var(--dsw-alias-state-warn-primary, #e5c07b);
+	background: var(--dsw-alias-state-warn-primary);
 	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent);
 	animation: dhacPulse 1.6s ease-in-out infinite;
 }
-.dhac_statusDot[data-status="exited"],
-.dhac_statusDot[data-status="unknown"] {
+.dhac_statusDot[data-status="idle"] {
+	background: var(--dsw-alias-state-success-primary);
+}
+.dhac_statusDot[data-status="blocked"] {
+	background: var(--dsw-alias-state-error-primary);
+}
+.dhac_statusDot[data-status="closing"] {
+	background: var(--dsw-alias-label-tertiary);
+	animation: dhacPulse 1.2s ease-in-out infinite;
+}
+.dhac_statusDot[data-status="exited"] {
 	background: var(--dsw-alias-label-tertiary);
 }
 @keyframes dhacPulse {
@@ -232,6 +263,32 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	flex: none;
 	padding: 1px 5px;
 }
+.dhac_agentRole {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding-left: 13px;
+}
+.dhac_agentMeta {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	padding-left: 13px;
+}
+.dhac_briefing {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-state-warn-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	padding-left: 13px;
+	animation: dhacPulse 1.6s ease-in-out infinite;
+}
+.dhac_briefingFailed {
+	color: var(--dsw-alias-state-error-primary);
+	animation: none;
+}
 .dhac_toolbar {
 	border-bottom: 1px solid var(--dsw-alias-border-l1);
 	background: var(--dsw-alias-bg-layer-1);
@@ -251,67 +308,50 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.dhac_termBody {
+.dhac_terminalWrap {
 	flex: 1;
 	min-height: 0;
+	background: var(--dsw-alias-bg-base);
 	flex-direction: column;
 	display: flex;
-	padding: 10px 12px;
-	gap: 10px;
+	position: relative;
 }
-.dhac_detailInfo {
-	flex: none;
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px 12px;
-	font: var(--dsw-font-xxs-12);
-	color: var(--dsw-alias-label-secondary);
-}
-.dhac_statusText {
-	font: var(--dsw-font-xxs-12);
-	color: var(--dsw-alias-label-tertiary);
-}
-.dhac_statusText[data-status="working"] { color: var(--dsw-alias-state-success-primary); }
-.dhac_statusText[data-status="starting"] { color: var(--dsw-alias-state-warn-primary, #e5c07b); }
-.dhac_statusText[data-status="exited"],
-.dhac_statusText[data-status="unknown"] { color: var(--dsw-alias-label-tertiary); }
-.dhac_infoItem {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	white-space: nowrap;
-}
-.dhac_cardInfo {
-	flex: none;
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 10px;
-	padding: 4px 10px 8px;
-	font: var(--dsw-font-xxs-12);
-	color: var(--dsw-alias-label-secondary);
-}
-.dhac_sendBox {
-	flex: none;
-	display: flex;
-	gap: 6px;
-	padding: 8px 0 0;
-	border-top: 1px solid var(--dsw-alias-border-l1);
-	margin-top: auto;
-}
-.dhac_sendBox .dhac_input {
+.dhac_terminal {
 	flex: 1;
+	min-height: 0;
+	padding: 6px 4px 6px 8px;
+	/* 圆角 + 裁切黑底：让 xterm 的黑色画布不再是一块生硬的黑方砖。 */
+	background: #0b0b10;
+	border: 1px solid var(--dsw-alias-border-l2);
+	border-radius: 10px;
+	overflow: hidden;
 }
-/* ---- terminal host badge ---- */
-.dhac_hostBadge {
+.dhac_terminal .xterm {
+	height: 100%;
+}
+.dhac_terminalBanner {
 	font: var(--dsw-font-xxxs-11);
 	color: var(--dsw-alias-label-tertiary);
 	background: var(--dsw-alias-bg-layer-1);
-	border: 1px solid var(--dsw-alias-border-l1);
-	border-radius: 999px;
-	padding: 1px 8px;
-	white-space: nowrap;
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	padding: 2px 10px;
+	display: flex;
+}
+.dhac_termDot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	flex: none;
+	background: var(--dsw-alias-label-tertiary);
+	animation: dhacPulse 1.2s ease-in-out infinite;
+}
+.dhac_termDotOn {
+	background: var(--dsw-alias-state-success-primary);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent);
+	animation: none;
 }
 .dhac_modal {
 	position: fixed;
@@ -465,19 +505,17 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_btnPrimary:hover:not(:disabled) {
 	background: var(--dsw-alias-button-primary-hover);
 }
-/* 小号按钮（会话历史卡片）+ 危险按钮（删除） */
 .dhac_btnSm {
-	height: 22px;
+	height: 24px;
+	font: var(--dsw-font-xxxs-11);
 	padding: 0 9px;
-	font: var(--dsw-font-xxxs-strong-11);
 	border-radius: 5px;
 }
 .dhac_btnDanger {
 	color: var(--dsw-alias-state-error-primary);
-	border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 40%, transparent);
 }
 .dhac_btnDanger:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, var(--dsw-alias-bg-layer-2));
 }
 .dhac_error {
 	font: var(--dsw-font-xxs-12);
@@ -489,44 +527,10 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	line-height: 1.5;
 }
 
-/* ---- 分区（运行中 / 会话历史）---- */
-.dhac_panel {
-	flex-direction: column;
-	gap: 14px;
-	display: flex;
-}
-.dhac_section {
-	flex-direction: column;
-	gap: 6px;
-	display: flex;
-	min-width: 0;
-}
-.dhac_sectionHeader {
-	align-items: center;
-	gap: 6px;
-	min-height: 22px;
-	display: flex;
-}
-.dhac_sectionTitle {
-	font: var(--dsw-font-xxs-strong-12);
-	color: var(--dsw-alias-label-secondary);
-}
-.dhac_sectionCount {
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	background: var(--dsw-alias-interactive-bg-hover);
-	border-radius: 8px;
-	line-height: 15px;
-	padding: 0 6px;
-}
-.dhac_sectionSpacer {
-	flex: 1;
-}
-
-/* ---- 运行中卡片 ---- */
+/* ---- live terminal cards ---- */
 .dhac_cards {
 	flex-direction: column;
-	gap: 6px;
+	gap: 8px;
 	display: flex;
 }
 .dhac_card {
@@ -542,26 +546,18 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 .dhac_card:hover {
 	border-color: var(--dsw-alias-border-l2);
 }
-.dhac_cardExited {
-	opacity: 0.72;
-}
 .dhac_cardHeader {
 	align-items: center;
 	gap: 6px;
 	min-width: 0;
 	flex: none;
-	padding: 6px 8px;
+	padding: 4px 6px 4px 8px;
+	border-bottom: 1px solid var(--dsw-alias-border-l1);
 	display: flex;
 }
-.dhac_cardActions {
-	flex: none;
-	align-items: center;
-	gap: 2px;
-	display: inline-flex;
-}
-.dhac_cardBtn {
-	width: 22px;
-	height: 22px;
+.dhac_cardClose {
+	width: 20px;
+	height: 20px;
 	color: var(--dsw-alias-label-tertiary);
 	cursor: pointer;
 	background: none;
@@ -572,21 +568,38 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	align-items: center;
 	padding: 0;
 	display: inline-flex;
-	font-size: 12px;
+	font-size: 11px;
 }
-.dhac_cardBtn:hover {
+.dhac_cardClose:hover {
 	background: var(--dsw-alias-interactive-bg-hover);
 	color: var(--dsw-alias-label-primary);
 }
-.dhac_cardBtnDanger:hover {
-	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 18%, transparent);
-	color: var(--dsw-alias-state-error-primary);
+.dhac_miniTermWrap {
+	height: 148px;
+	flex: none;
+	padding: 6px 6px 6px 8px;
+	position: relative;
 }
-.dhac_cardExitedHint {
+.dhac_miniTerm {
+	width: 100%;
+	height: 100%;
+	/* 圆角 + 裁切黑底（与详情终端一致）。 */
+	background: #0b0b10;
+	border: 1px solid var(--dsw-alias-border-l2);
+	border-radius: 10px;
+	overflow: hidden;
+}
+.dhac_miniTerm .xterm {
+	height: 100%;
+}
+.dhac_cardExited {
+	height: 148px;
 	flex: none;
 	font: var(--dsw-font-xxs-12);
 	color: var(--dsw-alias-label-tertiary);
-	padding: 0 10px 8px;
+	justify-content: center;
+	align-items: center;
+	display: flex;
 }
 .dhac_terminalDead {
 	flex: 1;
@@ -595,146 +608,14 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	color: var(--dsw-alias-label-tertiary);
 	justify-content: center;
 	align-items: center;
+	gap: 8px;
+	flex-direction: column;
 	display: flex;
 	padding: 16px;
 	text-align: center;
 }
-.dhac_detailNote {
-	flex: none;
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	background: var(--dsw-alias-bg-layer-1);
-	border: 1px solid var(--dsw-alias-border-l1);
-	border-radius: 6px;
-	padding: 6px 8px;
-	display: flex;
-	align-items: center;
-	gap: 5px;
-}
-
-/* ---- 会话历史卡片 ---- */
-.dhac_historyList {
-	flex-direction: column;
-	gap: 6px;
-	display: flex;
-}
-.dhac_historyCard {
-	border: 1px solid var(--dsw-alias-border-l1);
-	background: var(--dsw-alias-bg-layer-1);
-	border-radius: 8px;
-	flex-direction: row;
-	align-items: center;
-	gap: 8px;
-	min-width: 0;
-	padding: 8px 10px;
-	display: flex;
-}
-.dhac_historyCard:hover {
-	border-color: var(--dsw-alias-border-l2);
-}
-.dhac_historyCardRunning {
-	border-color: var(--dsw-alias-state-success-primary);
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent);
-	cursor: pointer;
-}
-.dhac_runningTag {
-	font: var(--dsw-font-xxs-12);
-	font-weight: 600;
-	color: var(--dsw-alias-state-success-primary);
-	flex: none;
-	white-space: nowrap;
-}
-.dhac_historyUptime {
-	color: var(--dsw-alias-state-success-primary);
-	white-space: nowrap;
-}
-.dhac_historyMain {
-	min-width: 0;
-	flex: 1;
-	flex-direction: column;
-	gap: 4px;
-	display: flex;
-}
-.dhac_historyTitleRow {
-	align-items: center;
-	gap: 6px;
-	min-width: 0;
-	display: flex;
-}
-.dhac_historyTitle {
-	min-width: 0;
-	font: var(--dsw-font-xxs-strong-12);
-	color: var(--dsw-alias-label-primary);
-	flex: 1;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.dhac_historyTime {
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	flex: none;
-	white-space: nowrap;
-}
-.dhac_historyMeta {
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 8px;
-	font: var(--dsw-font-xxxs-11);
-	color: var(--dsw-alias-label-tertiary);
-	display: flex;
-}
-.dhac_historyId {
-	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.dhac_historyToken {
-	color: var(--dsw-alias-label-secondary);
-}
-.dhac_historyCost {
-	color: var(--dsw-alias-state-warn-primary, #e5c07b);
-}
-.dhac_historyActions {
-	flex: none;
-	align-items: center;
-	gap: 6px;
-	display: flex;
-}
-.dhac_historyEmpty {
-	font: var(--dsw-font-xxs-12);
-	color: var(--dsw-alias-label-tertiary);
-	text-align: center;
-	border: 1px dashed var(--dsw-alias-border-l1);
-	border-radius: 8px;
-	padding: 14px 8px;
-}
-/* 引擎 chip：claude 橙 / opencode 绿 / codex 蓝 / codebuddy 紫 */
-.dhac_engineChip {
-	font: var(--dsw-font-xxxs-strong-11);
-	border: 1px solid transparent;
-	border-radius: 4px;
-	flex: none;
-	line-height: 16px;
-	padding: 0 5px;
-}
-.dhac_engineChip[data-engine="claude"] {
-	color: #e8a45c;
-	background: color-mix(in srgb, #e8a45c 14%, transparent);
-	border-color: color-mix(in srgb, #e8a45c 35%, transparent);
-}
-.dhac_engineChip[data-engine="opencode"] {
-	color: #7bd88f;
-	background: color-mix(in srgb, #7bd88f 14%, transparent);
-	border-color: color-mix(in srgb, #7bd88f 35%, transparent);
-}
-.dhac_engineChip[data-engine="codex"] {
-	color: #6cb6f5;
-	background: color-mix(in srgb, #6cb6f5 14%, transparent);
-	border-color: color-mix(in srgb, #6cb6f5 35%, transparent);
-}
-.dhac_engineChip[data-engine="codebuddy"] {
-	color: #c79af2;
-	background: color-mix(in srgb, #c79af2 14%, transparent);
-	border-color: color-mix(in srgb, #c79af2 35%, transparent);
+.dhac_terminalDeadHint {
+	opacity: 0.85;
 }
 
 /* ---- resize handle + status toasts ---- */
@@ -784,4 +665,175 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 }
 .dhac_toast_create {
 	border-color: var(--dsw-alias-state-business-primary);
+}
+
+/* ---- cache dialog ---- */
+.dhac_cacheRow {
+	border: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-base);
+	border-radius: 8px;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px 10px;
+	display: flex;
+}
+.dhac_cachePaths {
+	flex-direction: column;
+	gap: 1px;
+	display: flex;
+}
+.dhac_cachePath {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+	word-break: break-all;
+}
+
+/* ---- 会话历史（cc-switch 式）---- */
+.dhac_stack {
+	flex-direction: column;
+	gap: 12px;
+	display: flex;
+}
+.dhac_sessions {
+	flex-direction: column;
+	gap: 8px;
+	display: flex;
+}
+.dhac_sessionsTitle {
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-tertiary);
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	font-weight: 600;
+}
+.dhac_sessCard {
+	cursor: default;
+}
+.dhac_sessFooter {
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	display: flex;
+	padding: 2px 6px 6px;
+}
+/* 会话历史卡片的状态点：idle（无窗口承接）用中性灰，避免被误读为「运行中」的绿点。 */
+.dhac_sessCard .dhac_statusDot[data-status="idle"] {
+	background: var(--dsw-alias-label-tertiary);
+	box-shadow: none;
+	animation: none;
+}
+.dhac_sessCard:hover {
+	border-color: var(--dsw-alias-border-l2);
+}
+.dhac_sessCardRun {
+	border-color: var(--dsw-alias-state-success-primary);
+	box-shadow: 0 0 0 1px var(--dsw-alias-state-success-primary), 0 0 10px 0 color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent);
+}
+.dhac_sessCardRun:hover {
+	border-color: var(--dsw-alias-state-success-primary);
+	box-shadow: 0 0 0 1px var(--dsw-alias-state-success-primary), 0 0 12px 0 color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent);
+}
+/* 引擎名 chip（会话历史卡片，最右侧）：彩色文字 + 细边框，弱背景。 */
+.dhac_engineChip {
+	font: var(--dsw-font-xxxs-11);
+	font-weight: 600;
+	color: var(--dsw-alias-label-secondary);
+	border: 1px solid var(--dsw-alias-border-l1);
+	border-radius: 5px;
+	padding: 0 6px;
+	line-height: 16px;
+	white-space: nowrap;
+	text-transform: capitalize;
+	background: var(--dsw-alias-bg-layer-2);
+}
+.dhac_engineChip[data-engine="claude"] {
+	color: #ff8c42;
+	border-color: color-mix(in srgb, #ff8c42 50%, transparent);
+}
+.dhac_engineChip[data-engine="opencode"] {
+	color: var(--dsw-alias-label-primary);
+	border-color: var(--dsw-alias-border-l2);
+}
+.dhac_engineChip[data-engine="codebuddy"] {
+	color: #3fb950;
+	border-color: color-mix(in srgb, #3fb950 50%, transparent);
+}
+.dhac_engineChip[data-engine="codex"] {
+	color: #a371f7;
+	border-color: color-mix(in srgb, #a371f7 50%, transparent);
+}
+/* 图标按钮（翻页 / 标题栏刷新等）—— 无边框幽灵风，hover 才显底色。 */
+.dhac_iconBtn {
+	width: 22px;
+	height: 22px;
+	border: 1px solid transparent;
+	background: none;
+	color: var(--dsw-alias-label-tertiary);
+	border-radius: 5px;
+	cursor: pointer;
+	align-items: center;
+	justify-content: center;
+	display: inline-flex;
+	padding: 0;
+	transition: background 0.12s, color 0.12s;
+}
+.dhac_iconBtn:hover:not(:disabled) {
+	background: var(--dsw-alias-interactive-bg-hover);
+	color: var(--dsw-alias-label-primary);
+}
+.dhac_iconBtn:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+.dhac_iconBtnDanger {
+	color: var(--dsw-alias-state-error-primary);
+}
+.dhac_iconBtnDanger:hover:not(:disabled) {
+	color: var(--dsw-alias-state-error-primary);
+	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+}
+.dhac_sessChip {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-secondary);
+	border: 1px solid var(--dsw-alias-border-l1);
+	border-radius: 10px;
+	padding: 1px 6px;
+	white-space: nowrap;
+}
+.dhac_sessChipRun {
+	color: var(--dsw-alias-state-success-primary);
+	border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent);
+}
+.dhac_sessChipExit {
+	color: var(--dsw-alias-state-error-primary);
+	border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent);
+}
+.dhac_sessionsTitleRow {
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	display: flex;
+}
+.dhac_sessPager {
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	display: flex;
+	padding-top: 4px;
+}
+.dhac_sessPagerInfo {
+	font: var(--dsw-font-xxxs-11);
+	color: var(--dsw-alias-label-tertiary);
+}
+/* 会话历史卡片右侧的恢复/删除图标按钮（沿用智能体卡片的 dhac_cardClose）。 */
+.dhac_cardClose:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+.dhac_cardCloseDanger {
+	color: var(--dsw-alias-state-error-primary);
+}
+.dhac_cardCloseDanger:hover {
+	background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+	color: var(--dsw-alias-state-error-primary);
 }
