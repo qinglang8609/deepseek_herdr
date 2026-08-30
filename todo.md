@@ -1,6 +1,6 @@
 # dsh-agent-commander — 任务 / 演进记录
 
-> 当前分支：feat/terminal-host（工作区已含 v0.4 方向改动，未提交、未发布）。
+> 当前分支：main（v0.4.0 已发布：commit 16bf783 + tag v0.4.0，双远端已推送）。
 
 ## 当前架构决定（v0.4 方向）
 
@@ -15,7 +15,7 @@
 - [ ] 真机验证（重启 DSH）：node-pty 新建 → 自动启动确认 + 简报注入验证落地；点开「运行中」→ xterm 小窗实时输出；新建但未说话的 agent 即时入「运行中」；历史恢复/删除。
 - [ ] 验证 `/agent-commander/ws/terminal` 终端流（input/resize/signal/close）与「非详情页不流式渲染」的省内存设计。
 - [x] 清理文档遗留引用：`docs/terminal-host-dev.md` / `docs/herdr-integration-dev.md` 已删除，确认 README / plugin/README 无指向这些文件的失效链接（README 已同步去除 herdr 章节，plugin/README 无引用）。✅ 已核对（commit 9cd8dbc 工作区）：README / plugin/README 无对已删文档的失效链接（仅 README 版本历史叙述性提到 `docs/` 被移除，非链接；plugin/README 的 `docs/user/...` 为外部官方文档 URL）；plugin/ 下无 .md 或注释残留引用。
-- [ ] 发布 v0.4（`node scripts/release.mjs patch`；发布前先 `pnpm approve-builds` 放行 node-pty）。
+- [x] 发布 v0.4（`node scripts/release.mjs patch`；发布前先 `pnpm approve-builds` 放行 node-pty）。✅ 已发布 v0.4.0：build client 471785B + npm pack 回退正常；commit 16bf783 + tag v0.4.0；已推送 git.d8gx.com 与 github 双远端。tarball `dist/dsh-agent-commander-0.4.0.tgz`。
 
 ## 已完成的 v0.4 改动（本次工作区）
 
