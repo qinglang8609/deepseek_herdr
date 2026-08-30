@@ -1506,7 +1506,7 @@ var AgentRegistry = class {
 	syncPaneAgents(_cwd) { /* noop */ }
 	/** 恢复一个历史会话：node-pty 执行引擎 resume 命令。返回新 handle。 */
 	async restoreSession({ engine, sessionId: sid, cwd, name }) {
-		const binary = this.binaries[engine];
+		const binary = resolveBinary(engine);
 		if (binary === null) throw new Error(`引擎 "${engine}" 未安装`);
 		const targetCwd = typeof cwd === "string" && cwd !== "" ? cwd : this.baseCwd;
 		const args = RESUME_COMMANDS[engine]?.(sid) ?? [ "--resume", String(sid) ];
