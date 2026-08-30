@@ -916,6 +916,9 @@ var AgentRegistry = class {
 		this.listeners = new Set();
 		this.statusTimer = null;
 		this.statusSweepTimer = setInterval(() => this.statusSweep(), 5000);
+		// Post-boot approval watchdog: surface mid-task yes/no gates to the DSH
+		// panel as a 是/否 dialog instead of leaving the agent silently waiting.
+		this.approvalSweepTimer = setInterval(() => this.approvalSweep(), 800);
 		// True while restoreState/scanCwd are re-spawning saved agents: persist()
 		// must NOT delete the agents.json of a root it hasn't finished restoring
 		// yet (the file is the only record of those agents).
@@ -1359,6 +1362,50 @@ var AgentRegistry = class {
 		}
 	}
 	/**
+	 * Post-boot approval scan: keep surfacing critical yes/no gates to the user
+	 * (as a pendingApproval the DSH panel turns into a 是/否 dialog) for the life
+	 * of the agent, not just during boot. Boot is handled by answerPrompts; this
+	 * takes over after the monitor reaches "done". Critical prompts are NEVER
+	 * auto-answered — the agent waits for the user, and the user clicks in DSH.
+	 */
+	approvalScan(handle) {
+		if (handle.exited) return;
+		const m = handle._monitor;
+		if (m === void 0 || m.phase === "boot" || m.phase === "exit") return;
+		if (handle.pendingApproval !== void 0) return; // one pending at a time
+		const now = Date.now();
+		const norm = stripAnsi(String(handle.transcript ?? "").slice(-4000)).replace(/\s+/g, "");
+		const recent = norm.slice(-600);
+		const prompts = PER_ENGINE_PROMPTS[handle.type] ?? PER_ENGINE_PROMPTS.default;
+		for (const pattern of prompts) {
+			if (pattern.kind !== "critical") continue;
+			const match = pattern.re.exec(recent);
+			if (match === null) continue;
+			const sig = `${pattern.re.source}:${String(match[0] ?? "").slice(0, 40)}`;
+			const last = (m.answered ?? []).find((a) => a.sig === sig);
+			if (last !== void 0 && (pattern.once === true || now - last.at < MONITOR_ANSWER_REPEAT_MS)) continue;
+			handle.pendingApproval = {
+				sig,
+				prompt: String(match[0] ?? "").slice(0, 80) || "是否继续？",
+				engine: handle.type,
+				agentId: handle.id,
+				at: now,
+				answered: false,
+				answerType: "yes_no"
+			};
+			this.notify();
+			return;
+		}
+	}
+	/** Periodic sweep over running agents to raise any new mid-task approval. */
+	approvalSweep() {
+		for (const handle of this.agents.values()) {
+			try {
+				this.approvalScan(handle);
+			} catch {}
+		}
+	}
+	/**
 	 * Is the CLI formally ready to accept the briefing? Quiet after a boot grace
 	 * is the generic signal (TUIs only go quiet once they settle at the prompt);
 	 * per-engine markers catch CLIs whose footer keeps animating.
@@ -1784,6 +1831,15 @@ var AgentRegistry = class {
 		}, 120);
 		// 若挂起了「待确认」的关键 yes/no，用户已决定 → 清掉并通知刷新。
 		if (handle.pendingApproval !== void 0) {
+			const pa = handle.pendingApproval;
+			// 记住这次已答的签名，避免下个 tick 对同一截尾重复弹窗（新出现的同名
+			// y/n 门不受影响，因为它会带着新的时间戳/位置重新触发）。
+			const m = handle._monitor;
+			if (m !== void 0 && typeof pa?.sig === "string") {
+				m.answered = (m.answered ?? []).filter((a) => a.sig !== pa.sig);
+				m.answered.push({ sig: pa.sig, at: Date.now() });
+				if (m.answered.length > 40) m.answered.shift();
+			}
 			handle.pendingApproval = void 0;
 			this.notify();
 		}
