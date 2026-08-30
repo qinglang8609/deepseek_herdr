@@ -17,6 +17,18 @@
 - [x] 清理文档遗留引用：`docs/terminal-host-dev.md` / `docs/herdr-integration-dev.md` 已删除，确认 README / plugin/README 无指向这些文件的失效链接（README 已同步去除 herdr 章节，plugin/README 无引用）。✅ 已核对（commit 9cd8dbc 工作区）：README / plugin/README 无对已删文档的失效链接（仅 README 版本历史叙述性提到 `docs/` 被移除，非链接；plugin/README 的 `docs/user/...` 为外部官方文档 URL）；plugin/ 下无 .md 或注释残留引用。
 - [x] 发布 v0.4（`node scripts/release.mjs patch`；发布前先 `pnpm approve-builds` 放行 node-pty）。✅ 已发布 v0.4.0：build client 471785B + npm pack 回退正常；commit 16bf783 + tag v0.4.0；已推送 git.d8gx.com 与 github 双远端。tarball `dist/dsh-agent-commander-0.4.0.tgz`。
 
+## 开启/注入简报→启动完成 流程优化（用户反馈：codex 点 yes 退出 / opencode 偶发退出）
+
+> 根因：monitorTick 用一套全局正则（去空格匹配 `norm`）+ 静默/宽限启发式，跨引擎误判误答；`approve()` 一律写「1」+\r 适配不了 codex 的 `[y/N]`/`Proceed?` 类 yes-no；opencode 双 Ctrl+C 退出且启动中持续重绘，裸 Enter/重试易打进脆弱窗口。
+
+- [ ] **P0** `approve()` 引擎感知：读当前 `pendingApproval`（prompt/engine）+ 转录，按引擎+弹窗类型选正确键序（yes/no→`y`+\r；编号菜单→读选项列表再发对应数字；识别不出→把选项抛给用户 `agent_approve`）。不再无脑发「1」。
+- [ ] **P0** codex 启动配方：信任目录/onboarding 类提示自动答 `y`+\r（当前被 `enter:true` 一刀切按回车，方向错）；其余不确定提示 → hold 上报用户。
+- [ ] **P1** opencode 加固：启动期绝不发 `\x03`/Ctrl+C；仅当确认的 `Ask anything` 真提示符才 inject；`pressEnter` 重试限定为「转录未增 且 真提示符仍在」才补 Enter，且已有 `reacted` 即停。
+- [ ] **P1** 启动期崩溃自动重试：简报确认前 `pty` 退出 → 保留 `briefing/role/skills` 自动重启一次并重跑 monitor；超次明确报错并挂起。
+- [ ] **P2** 按引擎 `BOOT_SPELL` 状态机替代全局正则+静默启发式：每步 `{match, keys, action:'auto'|'hold'|'inject'}`，只对「该引擎确认为安全」的启动提示自动答。
+- [ ] **P2** 匹配改用保留标点的 `clean` + 锚定/词边界，避免跨引擎误命中。
+- [ ] **P2** 加 `monitor` 调试日志（engine/phase/action/命中 sig/写入键/转录增量），出问题看日志定位。
+
 ## 已完成的 v0.4 改动（本次工作区）
 
 - [x] 新增 `plugin/lib/session-monitor.js`；`pty-registry.js` / `log.js` 曾新增但未被 index.js 接入，本轮清理已删除。
