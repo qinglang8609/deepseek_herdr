@@ -144,20 +144,46 @@ const MONITOR_ANSWER_REPEAT_MS = 20000; // same question signature re-answered a
 // alone cannot detect its idle state — the sweep catches quiet agents instead.
 const STATUS_IDLE_AFTER_MS = 25000;   // ms of silence before a "working" agent is re-checked
 const STATUS_ACTIVE_RE = /[⠀-⣿]|Thinking|Forming|Brewing|Wrangling|Boogie|working on|Reading |esc to interrupt/i;
-// Prompts to auto-answer. `enter` confirms with Enter only (menus whose default
-// is the safe choice, e.g. claude's folder trust); `y` answers y + Enter.
-// Matched against the whitespace-stripped transcript tail.
-const MONITOR_QUESTION_PATTERNS = [
-	// auto：无害启动提示（安全检查 / 菜单回车）→ 自动答，不打扰用户。
-	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck/, enter: true, kind: "auto" },
-	// 目录信任：不同引擎语义不同 —— codex 是 [y/N]（默认 No，回车=拒绝/取消，易误退），
-	// 多数引擎回车即确认信任。故对 codex 发 "y"+\r（信任当前工作区），其余引擎维持回车。
-	{ re: /Doyoutrustthefilesinthisfolder/, enter: true, kind: "auto", engineKeys: { codex: ["y", "\r"] } },
-	// critical：真正的 y/n 权限门 → 不自动点，置 pendingApproval 上报用户决定。
-	{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, y: true, kind: "critical" },
-	// auto：菜单/回车类 → 自动答。
-	{ re: /PressEnterto|Entertoselect|Selectanoption/, enter: true, kind: "auto" }
-];
+// Prompts to auto-answer, grouped per engine. `keys` is the keystroke sequence
+// (last element is the Enter submit); kind="critical" (real y/n permission gate)
+// is NOT auto-answered — it surfaces to the user via pendingApproval. Matching is
+// engine-scoped (a phrase meant for claude isn't auto-answered for codex) and
+// anchored to the RECENT transcript tail, so an early boot echo doesn't re-trigger.
+// `once: true` = one-shot Enter/menu (never re-answer same sig); absent = y/n,
+// re-answered only after MONITOR_ANSWER_REPEAT_MS.
+const PER_ENGINE_PROMPTS = {
+	claude: [
+		{ re: /Entertoconfirm·Esctocancel|Quicksafetycheck/, keys: ["\r"], kind: "auto", once: true },
+		{ re: /Doyoutrustthefilesinthisfolder/, keys: ["\r"], kind: "auto", once: true },
+		{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, kind: "critical" },
+		{ re: /PressEnterto|Entertoselect|Selectanoption/, keys: ["\r"], kind: "auto", once: true }
+	],
+	codex: [
+		{ re: /1\.Yes,Itrustthisfolder/, keys: ["1", "\r"], kind: "auto", once: true },
+		{ re: /Doyoutrustthefilesinthisfolder/, keys: ["y", "\r"], kind: "auto", once: true },
+		{ re: /Howdoyouwanttoproceed|Selectanoption|Entertoselect/, keys: ["\r"], kind: "auto", once: true },
+		{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, kind: "critical" }
+	],
+	codebuddy: [
+		{ re: /Doyoutrustthefilesinthisfolder|Entertoconfirm·Esctocancel|Quicksafetycheck/, keys: ["\r"], kind: "auto", once: true },
+		{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, kind: "critical" }
+	],
+	// opencode 的提示由其专用 db 校验路径处理，不在此自动答。
+	opencode: [],
+	// 未单独列出的引擎回退到通用组。
+	default: [
+		{ re: /Doyoutrustthefilesinthisfolder/, keys: ["\r"], kind: "auto", once: true },
+		{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, kind: "critical" },
+		{ re: /PressEnterto|Entertoselect|Selectanoption|Entertoconfirm·Esctocancel|Quicksafetycheck/, keys: ["\r"], kind: "auto", once: true }
+	]
+};
+// Per-engine "CLI is ready to accept the briefing" marker. Only include engines
+// with a verified, unambiguous prompt glyph; others fall through to the generic
+// quiet heuristic (a bare ">" / "❯" would false-positive on ordinary output).
+const PER_ENGINE_READY_RE = {
+	opencode: /Askanything|escinterrupt|tabagents|ctrl\+p/,
+	claude: /\?forshortcuts|←foragents|❯Try|Welcomeback|Doyouwanttotrust/
+};
 /**
 * Graceful-exit command per engine (research: claude/codebuddy/qwen use /exit;
 * pi supports /exit and /quit; codex exits on `exit`; opencode has NO text exit —
@@ -1233,8 +1259,12 @@ var AgentRegistry = class {
 		// Once the monitor transitions to task phase, the agent handles its own prompts.
 		const m = handle._monitor;
 		if (m.phase !== "boot") return;
-		for (const pattern of MONITOR_QUESTION_PATTERNS) {
-			const match = pattern.re.exec(norm);
+		// 引擎白名单：只对「该引擎确认为安全」的启动提示自动答；未单列的引擎回退通用组。
+		const prompts = PER_ENGINE_PROMPTS[handle.type] ?? PER_ENGINE_PROMPTS.default;
+		// 只匹配最近一段转录尾，避免把启动早期回显/已答过的提示再次误答（锚定到近端）。
+		const recent = norm.slice(-600);
+		for (const pattern of prompts) {
+			const match = pattern.re.exec(recent);
 			if (match === null) continue;
 			const sig = `${pattern.re.source}:${String(match[0] ?? "").slice(0, 40)}`;
 			// Menus (Enter-confirm) are one-shot — the prompt text stays in the
@@ -1242,7 +1272,7 @@ var AgentRegistry = class {
 			// within the repeat window; a NEW y/n prompt of the same kind (e.g.
 			// several "Do you want to proceed?" permission gates) is re-answered.
 			const last = m.answered.find((a) => a.sig === sig);
-			if (last !== void 0 && (pattern.enter === true || now - last.at < MONITOR_ANSWER_REPEAT_MS)) continue;
+			if (last !== void 0 && (pattern.once === true || now - last.at < MONITOR_ANSWER_REPEAT_MS)) continue;
 			// critical：真正的 y/n 权限门 → 不自动点，挂起为「待确认」上报用户决定。
 			if (pattern.kind === "critical") {
 				if (handle.pendingApproval === void 0) {
@@ -1260,36 +1290,25 @@ var AgentRegistry = class {
 				handle.lastOutputAt = Date.now();
 				return; // 等待用户决定，不自动答
 			}
-			m.answered.push({ sig, at: pattern.enter === true ? Infinity : now });
+			const keys = pattern.keys ?? ["\r"];
+			m.answered.push({ sig, at: pattern.once === true ? Infinity : now });
 			if (m.answered.length > 40) m.answered.shift();
+			this._monLog(handle, `answer prompt keys=${JSON.stringify(keys)} sig=${sig}`);
 			try {
-				if (pattern.engineKeys && pattern.engineKeys[handle.type]) {
-					const keys = pattern.engineKeys[handle.type];
-					const last = keys.length - 1;
-					for (let i = 0; i < keys.length; i++) {
-						const k = keys[i];
-						if (i === last) {
-							setTimeout(() => {
-								try {
-									handle.pty.write(k);
-								} catch {}
-							}, 200);
-						} else {
+				const lastIx = keys.length - 1;
+				for (let i = 0; i < keys.length; i++) {
+					const k = keys[i];
+					if (i === lastIx) {
+						setTimeout(() => {
 							try {
 								handle.pty.write(k);
 							} catch {}
-						}
-					}
-				} else if (pattern.enter === true) {
-					handle.pty.write("\r");
-				} else {
-					// y + Enter (two-phase, same discipline as send/submit).
-					handle.pty.write("y");
-					setTimeout(() => {
+						}, 200);
+					} else {
 						try {
-							handle.pty.write("\r");
+							handle.pty.write(k);
 						} catch {}
-					}, 200);
+					}
 				}
 			} catch {}
 			// The answer will produce output; never inject right on top of it.
@@ -1304,15 +1323,13 @@ var AgentRegistry = class {
 	 */
 	cliReady(handle, clean, norm, elapsed) {
 		if (elapsed < MONITOR_BOOT_GRACE) return false;
-		// opencode: require its prompt marker. The TUI repaints continuously
-		// while restoring a session, so "quiet" alone is NOT a readiness signal —
-		// injecting during that window gets swallowed and the briefing is lost.
-		if (handle.type === "opencode") return /Askanything|escinterrupt|tabagents|ctrl\+p/.test(norm);
-		const quiet = Date.now() - (handle.lastOutputAt ?? Date.now()) >= MONITOR_QUIET_MS;
-		if (quiet) return true;
-		// Note: `norm` has all whitespace stripped, so markers must be too.
-		if (handle.type === "claude" && /\?forshortcuts|←foragents|❯Try|Welcomeback/.test(norm)) return true;
-		return false;
+		// 引擎专属「可注入」标记：opencode/claude 需等到真实提示符再注入，否则会吞掉简报。
+		const readyRe = PER_ENGINE_READY_RE[handle.type];
+		if (readyRe !== void 0 && readyRe.test(norm)) return true;
+		// opencode 的 TUI 在恢复会话时会持续重绘，「静默」不可靠，必须等真实提示符。
+		if (handle.type === "opencode") return false;
+		// 其余引擎：启动宽限期后静默即视为就绪。
+		return Date.now() - (handle.lastOutputAt ?? Date.now()) >= MONITOR_QUIET_MS;
 	}
 	/**
 	 * Write the role/skill briefing as the agent's first task. opencode's input
