@@ -28,6 +28,7 @@
 - [x] **P2** 按引擎 `BOOT_SPELL` 状态机替代全局正则+静默启发式：每步 `{match, keys, action:'auto'|'hold'|'inject'}`，只对「该引擎确认为安全」的启动提示自动答。✅ 改造成按引擎提示白名单 `PER_ENGINE_PROMPTS`（claude/codex/codebuddy/opencode/default，每引擎独立 `keys`+`once`/`critical`）+ 按引擎可注入标记 `PER_ENGINE_READY_RE`（opencode/claude 需真实提示符，其余用静默）。引擎级提示/就绪已达成，未用逐字符脚本化状态转换。
 - [x] **P2** 匹配改用保留标点的 `clean` + 锚定/词边界，避免跨引擎误命中。✅ 已引擎作用域（跨引擎误命中已消除）+ 只匹配最近 ~600 字符转录尾（近端锚定，避免早期回显重复误答）；`clean` 保留标点匹配随引擎白名单一并落地。
 - [x] **P2** 加 `monitor` 调试日志（engine/phase/action/命中 sig/写入键/转录增量），出问题看日志定位。✅ `_monLog()`，经 `DSH_AGENT_MONITOR_DEBUG=1` 开启；在 start/inject/press-enter/finish/approve-key 打点。
+- [x] **新功能** 终端弹出 yes/no 权限确认时，在外层 DSH 面板弹「需要确认」确认按钮（是 y / 否 n），点击即把对应键+回车发到终端。✅ 客户端新增 `ApprovalDialog`（监听 `agent.pendingApproval`），复用 node 已 relay 的 `pendingApproval`（meta）与 `/agents/:id/approve` 接口；app.js+panel.css+重建 client.js（474136B）。注：目前只在 monitor「boot/first-task」阶段检测 yes/no（对应创建后权限门）；长跑任务中途的权限门检测留作后续（风险更高）。
 
 ## 已完成的 v0.4 改动（本次工作区）
 

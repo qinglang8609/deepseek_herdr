@@ -388,6 +388,30 @@ body[data-dsh-title-bar-compat] .dhac_toggleCluster {
 	display: flex;
 	padding: 4px 16px 12px;
 }
+.dhac_approval {
+	width: min(400px, calc(100vw - 48px));
+}
+.dhac_approvalMeta {
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+	display: flex;
+}
+.dhac_approvalEngine {
+	font: var(--dsw-font-xxs-12);
+	color: var(--dsw-alias-label-secondary);
+}
+.dhac_approvalPrompt {
+	border: 1px solid var(--dsw-alias-border-l1);
+	background: var(--dsw-alias-bg-base);
+	border-radius: 6px;
+	padding: 10px 12px;
+	font: var(--dsw-font-s-14);
+	color: var(--dsw-alias-label-primary);
+	white-space: pre-wrap;
+	max-height: 40vh;
+	overflow-y: auto;
+}
 .dhac_field {
 	flex-direction: column;
 	gap: 4px;

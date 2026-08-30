@@ -1032,6 +1032,30 @@ var SafePanel = class extends react.Component {
 // ---------------------------------------------------------------------------
 // Radar panel — registered into the real "details" column slot
 // ---------------------------------------------------------------------------
+function ApprovalDialog({ agent, onApprove }) {
+	const pa = agent.pendingApproval;
+	return h("div", { className: "dhac_modal", onClick: (e) => e.stopPropagation() }, [
+		h("div", { className: "dhac_dialog dhac_approval" }, [
+			h("div", { className: "dhac_dialogTitle" }, [
+				h(Icon, { name: "alert", size: 14, className: "dhac_inlineIcon" }),
+				h("span", null, `「${agent.name}」需要确认`)
+			]),
+			h("div", { className: "dhac_dialogBody" }, [
+				h("div", { className: "dhac_approvalMeta" }, [
+					h("span", { className: "dhac_agentType" }, agent.type),
+					pa?.engine ? h("span", { className: "dhac_approvalEngine" }, `引擎 ${pa.engine}`) : null
+				]),
+				h("div", { className: "dhac_approvalPrompt", title: pa?.prompt ?? "" },
+					(pa?.prompt ?? "是否继续？"))
+			]),
+			h("div", { className: "dhac_dialogActions" }, [
+				h("button", { type: "button", className: "dhac_btn dhac_btnDanger", onClick: () => onApprove("2") }, "否 (n)"),
+				h("button", { type: "button", className: "dhac_btn dhac_btnPrimary", onClick: () => onApprove("1") }, "是 (y)")
+			])
+		])
+	]);
+}
+
 function RadarPanel(props) {
 	const [agents, setAgentsState] = useState(getAgents);
 	const [detailId, setDetailId] = useState(null);
@@ -1185,6 +1209,16 @@ function RadarPanel(props) {
 		}
 		reDetect(workspaceCwd);
 	};
+	// 确认一次 yes/no 权限提问（终端弹出 y/n 时，上面弹确认按钮）。choice "1"=是(y)、"2"=否(n)。
+	const approveAgent = async (id, choice) => {
+		try {
+			await apiPost(`/agents/${encodeURIComponent(id)}/approve`, { choice });
+		} catch (err) {
+			pushToast(`确认失败：${err instanceof Error ? err.message : String(err)}`, "exit");
+		}
+	};
+	// 有待确认权限提问的运行中智能体 → 外层弹一个确认按钮。
+	const pendingAgent = merged.find((a) => a.running !== false && a.pendingApproval);
 	// 恢复一条历史会话：走 node-pty 网页终端（resume 命令），恢复后进入「运行中」。
 	const restoreSession = async (sess) => {
 		try {
@@ -1256,6 +1290,11 @@ function RadarPanel(props) {
 				defaultCwd: sessionCwd,
 				onClose: () => setDialogOpen(false),
 				onCreated: () => reDetect(workspaceCwd)
+			}),
+		pendingAgent &&
+			h(ApprovalDialog, {
+				agent: pendingAgent,
+				onApprove: (choice) => approveAgent(pendingAgent.id, choice)
 			})
 	]);
 }
