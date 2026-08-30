@@ -165,6 +165,8 @@ const PER_ENGINE_PROMPTS = {
 	codex: [
 		{ re: /1\.Yes,Itrustthisfolder/, keys: ["1", "\r"], kind: "auto", once: true },
 		{ re: /Doyoutrustthefilesinthisfolder/, keys: ["y", "\r"], kind: "auto", once: true },
+		// codex 0.151 的 Hook 信任门（用户自带 SessionStart hook）→ 按 t 信任并继续启动。
+		{ re: /Presstotrustall|hookneedsreview/, keys: ["t"], kind: "auto", once: true },
 		{ re: /Howdoyouwanttoproceed|Selectanoption|Entertoselect/, keys: ["\r"], kind: "auto", once: true },
 		{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, kind: "critical" }
 	],
@@ -1869,8 +1871,10 @@ var AgentRegistry = class {
 	_gateKeys(handle) {
 		const tail = stripAnsi(String(handle.transcript ?? "").slice(-900));
 		const compact = tail.replace(/\s+/g, "");
-		// 1/2/3 菜单（claude 权限：1=Yes,2=Yes always,3=No）→ 是=1，否=3。
-		if (/1\.Yes,andalwaysallow|2\.Yes,andalwaysallow|Yes,andalwaysallowaccess/.test(compact)) return { yes: "1", no: "3" };
+		// 编号 yes 菜单："Do you want to proceed?" + "1. Yes … N. No"（claude/codebuddy）
+		// → 是=1，否=No 选项的数字（取 "N.No" 里的 N）。
+		const noNum = compact.match(/([0-9]+)\.No[,.]/);
+		if (noNum !== null && /\d\.Yes/.test(compact) && /Doyouwanttoproceed|Proceed\?/.test(compact)) return { yes: "1", no: noNum[1] };
 		// 允许/拒绝（1 允许 / 0 拒绝）→ 是=1，否=0。
 		if (/输入1表示允许|输入0表示拒绝|1表示允许|0表示拒绝|1toallow|0todeny|Toallow|Todeny/.test(compact)) return { yes: "1", no: "0" };
 		// 纯 y/n → y/n。
