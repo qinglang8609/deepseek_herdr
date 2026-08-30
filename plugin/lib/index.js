@@ -941,6 +941,8 @@ var AgentRegistry = class {
 		const agentId = typeof id === "string" && id !== "" ? id : randomUUID().slice(0, 8);
 		const trimmedRole = (role ?? "").trim();
 		const skillList = Array.isArray(skills) ? skills.filter((s) => typeof s === "string") : [];
+		const spawnCols = Math.max(2, Math.floor(cols ?? 80));
+		const spawnRows = Math.max(2, Math.floor(rows ?? 24));
 		const handle = {
 			id: agentId,
 			type,
@@ -948,6 +950,8 @@ var AgentRegistry = class {
 			role: trimmedRole,
 			skills: skillList,
 			cwd: targetCwd,
+			_cols: spawnCols,
+			_rows: spawnRows,
 			sessionId: typeof sessionId === "string" ? sessionId : "",
 			// 引擎会话缓存 ID（claude jsonl / codex rollout / opencode db 的会话 id）。
 			// 与上面的 sessionId（创建时所在的 DSH 会话 id，供 projectRootOf 定位项目根）
@@ -972,13 +976,29 @@ var AgentRegistry = class {
 			pendingApproval: void 0,
 			pty: this.nodePty.spawn(binary, [], {
 				name: "xterm-256color",
-				cols: Math.max(2, Math.floor(cols ?? 80)),
-				rows: Math.max(2, Math.floor(rows ?? 24)),
+				cols: spawnCols,
+				rows: spawnRows,
 				cwd: targetCwd,
 				env: this.agentEnv(targetCwd)
 			})
 		};
 		handle.pid = handle.pty.pid;
+		this._attachPty(handle);
+		this.agents.set(agentId, handle);
+		// Startup monitor: watch boot, auto-answer prompts (folder trust, y/n),
+		// inject the briefing and submit it with Enter once the CLI has formally
+		// entered its UI, and keep answering until the first task completes.
+		this.startMonitor(handle, handle.briefing === "pending");
+		this.notify();
+		this.persist();
+		return handle;
+	}
+	/** Wire the live pty of an agent to its transcript/status and exit handling.
+	 * Shared by create() and _respawn() so both get identical lifecycle hooks.
+	 * On a boot-phase crash (briefing still pending, no retry yet) we auto-respawn
+	 * once, preserving the pending briefing/role/skills, so the "agent dies at
+	 * startup/approval" case recovers instead of leaving a dead card. */
+	_attachPty(handle) {
 		handle.pty.onData((data) => {
 			handle.transcript += data;
 			if (handle.transcript.length > this.transcriptLimit) handle.transcript = handle.transcript.slice(handle.transcript.length - this.transcriptLimit);
@@ -996,17 +1016,67 @@ var AgentRegistry = class {
 			handle.exitCode = exitCode;
 			handle.status = "exited";
 			handle.updatedAt = Date.now();
+			const m = handle._monitor;
+			// 仅当「真的在启动进程」时自动重开：有输出（非秒退）且不在用户主动关闭（phase=exit 已排除）。
+			const actuallyBooted = handle.transcript.length > 0;
+			const bootCrash = m !== void 0 && m.phase === "boot" && !m.reacted && handle.briefing === "pending" && handle._respawned !== true && actuallyBooted;
+			if (bootCrash) {
+				handle._respawned = true;
+				this._monLog(handle, `boot crash (exit=${exitCode}) → auto-respawn`);
+				try {
+					this._respawn(handle);
+				} catch (e) {
+					console.warn("[dsh-agent-commander] respawn failed:", e?.message ?? e);
+					this.notify();
+					this.persist();
+				}
+				return;
+			}
 			this.notify();
 			this.persist();
 		});
-		this.agents.set(agentId, handle);
-		// Startup monitor: watch boot, auto-answer prompts (folder trust, y/n),
-		// inject the briefing and submit it with Enter once the CLI has formally
-		// entered its UI, and keep answering until the first task completes.
-		this.startMonitor(handle, handle.briefing === "pending");
+	}
+	/** Lightweight restart of an agent's pty (fresh conversation), re-running the
+	 * startup monitor with the same briefing intent. Used once after a boot crash. */
+	_respawn(handle) {
+		try {
+			handle.pty?.kill();
+		} catch {}
+		const binary = resolveBinary(handle.type);
+		if (binary === null) {
+			handle.exited = true;
+			handle.status = "exited";
+			this.notify();
+			this.persist();
+			return;
+		}
+		const inject = handle._monitor?.inject === true;
+		// 重开是全新对话：清空转录与会话缓存，简报按原 intent 重注入。
+		handle.exited = false;
+		handle.exitCode = null;
+		handle.status = "idle";
+		handle.pendingApproval = void 0;
+		handle.transcript = "";
+		handle.sessionCacheId = void 0;
+		handle.pty = this.nodePty.spawn(binary, [], {
+			name: "xterm-256color",
+			cols: handle._cols ?? 80,
+			rows: handle._rows ?? 24,
+			cwd: handle.cwd,
+			env: this.agentEnv(handle.cwd)
+		});
+		handle.pid = handle.pty.pid;
+		this._attachPty(handle);
+		this.startMonitor(handle, inject);
 		this.notify();
 		this.persist();
-		return handle;
+	}
+	/** Debug log for the startup monitor. Opt-in via DSH_AGENT_MONITOR_DEBUG=1 so
+	 * it doesn't spam normal operation, but makes real-machine issues diagnosable
+	 * from the host log when enabled. */
+	_monLog(handle, msg) {
+		if (process.env.DSH_AGENT_MONITOR_DEBUG !== "1") return;
+		console.warn(`[dsh-agent-commander][monitor] ${handle?.id ?? "?"} ${msg}`);
 	}
 	/** Minimal env for spawned agents — whitelist only; never leak harness secrets (fixes MEDIUM env leak). */
 	agentEnv(cwd) {
@@ -1038,6 +1108,7 @@ var AgentRegistry = class {
 			answered: []            // [{ sig, at }] — prompts already answered
 		};
 		if (inject) handle.briefing = "pending";
+		this._monLog(handle, `start monitor (engine=${handle.type}, inject=${inject})`);
 		handle._monitorTimer = setTimeout(() => this.monitorTick(handle), MONITOR_POLL_MS);
 	}
 	/**
@@ -1270,6 +1341,7 @@ var AgentRegistry = class {
 		m.enters = 0;
 		m.reacted = false;
 		m.enterDue = m.injectAt + MONITOR_ENTER_DELAY;
+		this._monLog(handle, "inject briefing (submit scheduled)");
 		if (handle.type === "opencode") {
 			m.ocAttempts = 0;
 			m.ocVerifyAt = m.injectAt + MONITOR_OPENCODE_VERIFY_MS;
@@ -1348,6 +1420,7 @@ var AgentRegistry = class {
 		m.enters += 1;
 		m.baseline = handle.transcript.length;
 		m.enterDue = Date.now() + MONITOR_ENTER_RETRY_MS;
+		this._monLog(handle, `press enter #${m.enters}`);
 		try {
 			handle.pty.write("\r");
 		} catch {}
@@ -1357,6 +1430,7 @@ var AgentRegistry = class {
 		m.phase = "done";
 		handle.briefing = state;
 		handle.updatedAt = Date.now();
+		this._monLog(handle, `finish monitor → ${state}`);
 		this.notify();
 		// Keep .deepseek/agents.json in sync: without this it stays at the
 		// creation-time "pending" snapshot forever even after the briefing was
@@ -1637,6 +1711,7 @@ var AgentRegistry = class {
 	approve(id, choice = "1") {
 		const handle = this.requireLive(id);
 		const key = this._approvalKey(handle, choice);
+		this._monLog(handle, `approve choice=${JSON.stringify(choice)} key=${JSON.stringify(key)} engine=${handle.type}`);
 		handle.pty.write(key);
 		setTimeout(() => {
 			try {

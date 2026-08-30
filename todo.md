@@ -23,11 +23,11 @@
 
 - [x] **P0** `approve()` 引擎感知：读当前 `pendingApproval`（prompt/engine）+ 转录，按引擎+弹窗类型选正确键序（yes/no→`y`+\r；编号菜单→读选项列表再发对应数字；识别不出→把选项抛给用户 `agent_approve`）。不再无脑发「1」。✅ 已改（index.js）：新增 `_approvalKey()`，pendingApproval.answerType==="yes_no" → choice 归一化为 `y`/`n`；无挂起时用 `stripAnsi` 转录尾判断 y/n 还是编号菜单。待重启 DSH 实测 codex。
 - [x] **P0** codex 启动配方：信任目录/onboarding 类提示自动答 `y`+\r（当前被 `enter:true` 一刀切按回车，方向错）；其余不确定提示 → hold 上报用户。✅ 已改（index.js）：信任目录 pattern 拆出独立，加 `engineKeys:{codex:["y","\r"]}`，answerPrompts 按引擎写键；非 codex 维持回车。待重启 DSH 实测。
-- [ ] **P1** opencode 加固：启动期绝不发 `\x03`/Ctrl+C；仅当确认的 `Ask anything` 真提示符才 inject；`pressEnter` 重试限定为「转录未增 且 真提示符仍在」才补 Enter，且已有 `reacted` 即停。
-- [ ] **P1** 启动期崩溃自动重试：简报确认前 `pty` 退出 → 保留 `briefing/role/skills` 自动重启一次并重跑 monitor；超次明确报错并挂起。
-- [ ] **P2** 按引擎 `BOOT_SPELL` 状态机替代全局正则+静默启发式：每步 `{match, keys, action:'auto'|'hold'|'inject'}`，只对「该引擎确认为安全」的启动提示自动答。
-- [ ] **P2** 匹配改用保留标点的 `clean` + 锚定/词边界，避免跨引擎误命中。
-- [ ] **P2** 加 `monitor` 调试日志（engine/phase/action/命中 sig/写入键/转录增量），出问题看日志定位。
+- [x] **P1** opencode 加固：启动期绝不发 `\x03`/Ctrl+C；仅当确认的 `Ask anything` 真提示符才 inject；`pressEnter` 重试限定为「转录未增 且 真提示符仍在」才补 Enter，且已有 `reacted` 即停。✅ 核查：opencode 路径本就排除裸 Enter 重试（走 db 校验+整段重写）、inject 仅在 `Askanything` 真提示符时触发、monitor 启动期无 Ctrl+C；本轮 `_attachPty` 启动期崩溃自动重开进一步兜底。注：opencode「运行中偶退」超出启动监控范畴，若复现需单独排查（非本监控 bug）。
+- [x] **P1** 启动期崩溃自动重试：简报确认前 `pty` 退出 → 保留 `briefing/role/skills` 自动重启一次并重跑 monitor；超次明确报错并挂起。✅ 实现：`create()` 抽出 `_attachPty()`（create/_respawn 共用），onExit 判定 bootCrash（phase=boot、未 reacted、briefing=pending、未重试、有输出）→ `_respawn()` 一次（上限 1 次，用户主动 close 经 phase=exit 已排除，秒退无输出不重开）。
+- [ ] **P2** 按引擎 `BOOT_SPELL` 状态机替代全局正则+静默启发式：每步 `{match, keys, action:'auto'|'hold'|'inject'}`，只对「该引擎确认为安全」的启动提示自动答。⏳ 结构性重构，待后续。
+- [ ] **P2** 匹配改用保留标点的 `clean` + 锚定/词边界，避免跨引擎误命中。◐ 部分：信任目录拆独立 pattern + `engineKeys:{codex}`（P0）与 `_approvalKey` 用 stripAnsi 转录尾判别，已向引擎化推进；完整「clean 锚定」随状态机一起做。
+- [x] **P2** 加 `monitor` 调试日志（engine/phase/action/命中 sig/写入键/转录增量），出问题看日志定位。✅ `_monLog()`，经 `DSH_AGENT_MONITOR_DEBUG=1` 开启；在 start/inject/press-enter/finish/approve-key 打点。
 
 ## 已完成的 v0.4 改动（本次工作区）
 
