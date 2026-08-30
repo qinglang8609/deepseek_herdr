@@ -958,6 +958,7 @@ var AgentRegistry = class {
 		const binary = resolveBinary(type);
 		if (binary === null) throw new Error(`agent type "${type}" is not installed`);
 		const targetCwd = validateCwd(cwd, this.baseCwd);
+		if (type === "codex") this.ensureCodexTrust(targetCwd); // codex ≥0.151 folder-trust gate
 		seedSharedMemory(targetCwd, this.memoryDir);
 		if (this.onSpawn !== null) {
 			try {
@@ -1119,6 +1120,40 @@ var AgentRegistry = class {
 			if (typeof value === "string") env[key] = value;
 		}
 		return env;
+	}
+	/**
+	 * codex ≥0.151 gates loading project-local config/hooks/exec policies behind a
+	 * folder-trust prompt (only the EXACT cwd is honored — a trusted parent is not
+	 * enough). Spawned interactively by node-pty, codex renders that as a full-screen
+	 * TUI; the monitor neither fingerprints it as a y/n nor pauses the briefing, so a
+	 * stray Enter/briefing lands on its prompt and codex aborts. The robust fix is to
+	 * pre-trust the spawn cwd: ensure `~/.codex/config.toml` has
+	 * `[projects."<cwd>"] trust_level = "trusted"`. Idempotent + safe: only appends when
+	 * the exact dir isn't already listed, never rewrites an existing project entry, and
+	 * makes a one-time backup before the first edit. Returns true if the config now
+	 * trusts the dir (or already did).
+	 */
+	ensureCodexTrust(cwd) {
+		if (typeof cwd !== "string" || cwd === "") return false;
+		try {
+			const configPath = join(homedir(), ".codex", "config.toml");
+			if (!existsSync(configPath)) return false;
+			const quoted = '"' + String(cwd).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+			const header = `[projects.${quoted}]`;
+			const original = readFileSync(configPath, "utf8");
+			// Already listed? Respect an existing entry either way — never override a
+			// user's explicit choice, and never duplicate the table.
+			if (original.includes(header)) return true;
+			// Back up the user's config only the first time we modify it.
+			const bak = configPath + ".dshbak";
+			if (!existsSync(bak)) writeFileSync(bak, original, "utf8");
+			const block = `\n\n# added by dsh-agent-commander (auto-trust so codex boots without the folder-trust prompt)\n${header}\ntrust_level = "trusted"\n`;
+			writeFileSync(configPath, original + (original.endsWith("\n") ? "" : "\n") + block, "utf8");
+			return true;
+		} catch (error) {
+			console.warn("[dsh-agent-commander] codex trust ensure failed:", error?.message ?? error);
+			return false;
+		}
 	}
 	/**
 	 * Start the lifecycle monitor for a freshly spawned agent. `inject` is true
@@ -1330,6 +1365,8 @@ var AgentRegistry = class {
 	 */
 	cliReady(handle, clean, norm, elapsed) {
 		if (elapsed < MONITOR_BOOT_GRACE) return false;
+		// 有挂起的确认（权限/信任门）→ 绝不在此时注入简报，避免把简报打进确认提示。
+		if (handle.pendingApproval !== void 0) return false;
 		// 引擎专属「可注入」标记：opencode/claude 需等到真实提示符再注入，否则会吞掉简报。
 		const readyRe = PER_ENGINE_READY_RE[handle.type];
 		if (readyRe !== void 0 && readyRe.test(norm)) return true;
@@ -1648,6 +1685,7 @@ var AgentRegistry = class {
 		const binary = resolveBinary(engine);
 		if (binary === null) throw new Error(`引擎 "${engine}" 未安装`);
 		const targetCwd = typeof cwd === "string" && cwd !== "" ? cwd : this.baseCwd;
+		if (engine === "codex") this.ensureCodexTrust(targetCwd);
 		const args = RESUME_COMMANDS[engine]?.(sid) ?? [ "--resume", String(sid) ];
 		const agentId = randomUUID().slice(0, 8);
 		const handle = {

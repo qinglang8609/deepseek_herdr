@@ -29,6 +29,7 @@
 - [x] **P2** 匹配改用保留标点的 `clean` + 锚定/词边界，避免跨引擎误命中。✅ 已引擎作用域（跨引擎误命中已消除）+ 只匹配最近 ~600 字符转录尾（近端锚定，避免早期回显重复误答）；`clean` 保留标点匹配随引擎白名单一并落地。
 - [x] **P2** 加 `monitor` 调试日志（engine/phase/action/命中 sig/写入键/转录增量），出问题看日志定位。✅ `_monLog()`，经 `DSH_AGENT_MONITOR_DEBUG=1` 开启；在 start/inject/press-enter/finish/approve-key 打点。
 - [x] **新功能** 终端弹出 yes/no 权限确认时，在外层 DSH 面板弹「需要确认」确认按钮（是 y / 否 n），点击即把对应键+回车发到终端。✅ 客户端新增 `ApprovalDialog`（监听 `agent.pendingApproval`），复用 node 已 relay 的 `pendingApproval`（meta）与 `/agents/:id/approve` 接口；app.js+panel.css+重建 client.js（474136B）。注：目前只在 monitor「boot/first-task」阶段检测 yes/no（对应创建后权限门）；长跑任务中途的权限门检测留作后续（风险更高）。
+- [x] **根因定位：codex「秒退」= codex 自动升级到 0.151.0 引入的「目录信任门」**（openai/codex PR #14718 trust-gate project hooks and exec policies）。该版本只认**精确 cwd** 的 `[projects."<cwd>"] trust_level="trusted"`，父目录（`/Users/fanchao`）信任不再生效；未信任目录启动时 codex 渲染**全屏 TUI 信任提示**（"…directory allows project-local config, hooks, and exec policies to load"），monitor 既识别不出（norm 无空格/大小写疑难）也不暂停注入，简报被打进去→codex 视为非「y」→ 作废退出。✅ 修复：`ensureCodexTrust(cwd)`——spawn codex 前幂等、安全地给 `~/.codex/config.toml` 追加 `[projects."<cwd>"] trust_level="trusted"`（已存在则跳过、首次修改前备份 `config.toml.dshbak`、永不覆写用户既有条目）；create/restoreSession 对 codex 调用。另加保护：`cliReady` 若 `pendingApproval` 挂起则返回 false，绝不在确认提示期注入简报。
 
 ## 已完成的 v0.4 改动（本次工作区）
 
