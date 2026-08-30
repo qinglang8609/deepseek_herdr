@@ -8340,8 +8340,8 @@ function ApprovalDialog({ agent, onApprove }) {
 					(pa?.prompt ?? "是否继续？"))
 			]),
 			h("div", { className: "dhac_dialogActions" }, [
-				h("button", { type: "button", className: "dhac_btn dhac_btnDanger", onClick: () => onApprove("2") }, "否 (n)"),
-				h("button", { type: "button", className: "dhac_btn dhac_btnPrimary", onClick: () => onApprove("1") }, "是 (y)")
+				h("button", { type: "button", className: "dhac_btn dhac_btnDanger", onClick: () => onApprove("2") }, "否 / 拒绝"),
+				h("button", { type: "button", className: "dhac_btn dhac_btnPrimary", onClick: () => onApprove("1") }, "是 / 允许")
 			])
 		])
 	]);

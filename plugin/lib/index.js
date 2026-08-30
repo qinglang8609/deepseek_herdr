@@ -156,6 +156,10 @@ const PER_ENGINE_PROMPTS = {
 		{ re: /Entertoconfirm·Esctocancel|Quicksafetycheck/, keys: ["\r"], kind: "auto", once: true },
 		{ re: /Doyoutrustthefilesinthisfolder/, keys: ["\r"], kind: "auto", once: true },
 		{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, kind: "critical" },
+		// claude 编号菜单（3 项）：1=Yes,2=Yes always,3=No → 是=1，否=3。
+		{ re: /1\.Yes,andalwaysallow|2\.Yes,andalwaysallow|Yes,andalwaysallowaccess/, kind: "critical" },
+		// claude 允许/拒绝（1 允许 / 0 拒绝）：是=1，否=0。
+		{ re: /输入1表示允许|输入0表示拒绝|1表示允许|0表示拒绝|1toallow|0todeny|Toallow|Todeny/, kind: "critical" },
 		{ re: /PressEnterto|Entertoselect|Selectanoption/, keys: ["\r"], kind: "auto", once: true }
 	],
 	codex: [
@@ -1853,13 +1857,25 @@ var AgentRegistry = class {
 		const isYes = ["1", "y", "yes", "true", "on"].includes(c);
 		const isNo = ["2", "n", "no", "false", "off"].includes(c);
 		const pa = handle.pendingApproval;
-		if (pa !== void 0 && pa.answerType === "yes_no") return isYes ? "y" : isNo ? "n" : (c.slice(0, 1) || "y");
-		// 无挂起记录：从转录尾判断是 y/n 还是编号菜单。
+		// 优先按「真实门类型」选键（编号菜单的 是/否 可能不是 y/n）。
+		const gk = pa?.keys ?? this._gateKeys(handle);
+		if (gk) return isYes ? gk.yes : isNo ? gk.no : (c.slice(0, 1) || gk.yes);
+		return c; // 编号菜单或未知 → 保留用户/默认的数字。
+	}
+	/**
+	 * Inspect the transcript tail to decide Yes/No keys for the current gate.
+	 * y/n gates use y/n; claude's 1/2/3 menu uses 1/3; allow/deny uses 1/0.
+	 */
+	_gateKeys(handle) {
 		const tail = stripAnsi(String(handle.transcript ?? "").slice(-900));
 		const compact = tail.replace(/\s+/g, "");
-		const looksYesNo = /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No|continue\?|areyousure/i.test(compact);
-		if (looksYesNo) return isYes ? "y" : isNo ? "n" : (c.slice(0, 1) || "y");
-		return c; // 编号菜单或未知 → 保留用户/默认的数字。
+		// 1/2/3 菜单（claude 权限：1=Yes,2=Yes always,3=No）→ 是=1，否=3。
+		if (/1\.Yes,andalwaysallow|2\.Yes,andalwaysallow|Yes,andalwaysallowaccess/.test(compact)) return { yes: "1", no: "3" };
+		// 允许/拒绝（1 允许 / 0 拒绝）→ 是=1，否=0。
+		if (/输入1表示允许|输入0表示拒绝|1表示允许|0表示拒绝|1toallow|0todeny|Toallow|Todeny/.test(compact)) return { yes: "1", no: "0" };
+		// 纯 y/n → y/n。
+		if (/Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No|continue\?|areyousure/i.test(compact)) return { yes: "y", no: "n" };
+		return null;
 	}
 	/** Start a NEW conversation inside the agent (per-engine command, two-phase submit). */
 	newSession(id) {
