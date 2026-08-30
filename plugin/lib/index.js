@@ -1042,6 +1042,8 @@ var AgentRegistry = class {
 			handle.exitCode = exitCode;
 			handle.status = "exited";
 			handle.updatedAt = Date.now();
+			// 退出时把最近输出的尾巴打到调试日志，便于真机排查「秒退/启动即退」的真正原因。
+			this._monLog(handle, `exit code=${exitCode} tail="${stripAnsi(handle.transcript).slice(-160)}"`);
 			const m = handle._monitor;
 			// 仅当「真的在启动进程」时自动重开：有输出（非秒退）且不在用户主动关闭（phase=exit 已排除）。
 			const actuallyBooted = handle.transcript.length > 0;
