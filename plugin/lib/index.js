@@ -1042,6 +1042,11 @@ var AgentRegistry = class {
 			handle.exitCode = exitCode;
 			handle.status = "exited";
 			handle.updatedAt = Date.now();
+			// 启动期退出：把最近输出存为 bootError，让面板能直接看到「为什么秒退」。
+			if (handle._monitor?.phase === "boot") {
+				const tail = stripAnsi(handle.transcript).slice(-200).trim();
+				if (tail !== "") handle.bootError = tail;
+			}
 			// 退出时把最近输出的尾巴打到调试日志，便于真机排查「秒退/启动即退」的真正原因。
 			this._monLog(handle, `exit code=${exitCode} tail="${stripAnsi(handle.transcript).slice(-160)}"`);
 			const m = handle._monitor;
@@ -1468,6 +1473,7 @@ var AgentRegistry = class {
 	markBriefingSent(handle) {
 		if (handle.briefing === "sent") return; // 幂等
 		handle.briefing = "sent";
+		handle.bootError = void 0; // 简报已着陆说明启动成功，清除启动期报错提示
 		handle.updatedAt = Date.now();
 		this.notify();
 		this.persist();
@@ -1491,6 +1497,7 @@ var AgentRegistry = class {
 			restored: handle.restored === true,
 			briefing: handle.briefing ?? "none",
 			pendingApproval: handle.pendingApproval ?? null,
+			bootError: handle.bootError ?? null,
 			createdAt: handle.createdAt,
 			updatedAt: handle.updatedAt
 		};

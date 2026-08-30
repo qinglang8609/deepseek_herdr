@@ -8145,6 +8145,13 @@ function AgentCards({ agents, scoped, onOpen, onCompact, onNewSession, onCloseAg
 				h(Icon, { name: agent.briefing === "pending" ? "clock" : "alert", size: 11, className: "dhac_inlineIcon" }),
 				agent.briefing === "pending" ? "简报注入中（等待启动就绪后自动回车执行）…" : "简报未能确认执行，请打开终端检查"
 			]),
+			agent.bootError && h("div", {
+				className: "dhac_briefing dhac_briefingFailed",
+				title: agent.bootError
+			}, [
+				h(Icon, { name: "alert", size: 11, className: "dhac_inlineIcon" }),
+				h("span", null, `启动异常：${agent.bootError}`)
+			]),
 			ghost
 				? h("div", { className: "dhac_cardExited" }, [
 					"未运行（恢复失败或已关闭）— ",
@@ -8268,7 +8275,10 @@ function TerminalDetail({ agent, onBack, onCompact, onNewSession, onCloseAgent, 
 				])
 			])
 			: (agent.exited
-				? h("div", { className: "dhac_terminalDead" }, [`进程已退出 (code ${agent.exitCode ?? "?"})`])
+				? h("div", { className: "dhac_terminalDead" }, [
+					h("div", null, `进程已退出 (code ${agent.exitCode ?? "?"})`),
+					agent.bootError ? h("div", { className: "dhac_terminalDeadHint", title: agent.bootError }, agent.bootError) : null
+				])
 				: h(AgentTerminal, { agentId: agent.id, signalRef }))
 	]);
 }
