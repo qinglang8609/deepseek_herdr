@@ -148,8 +148,11 @@ const STATUS_ACTIVE_RE = /[⠀-⣿]|Thinking|Forming|Brewing|Wrangling|Boogie|wo
 // is the safe choice, e.g. claude's folder trust); `y` answers y + Enter.
 // Matched against the whitespace-stripped transcript tail.
 const MONITOR_QUESTION_PATTERNS = [
-	// auto：无害启动提示（目录信任 / 安全检查 / 菜单回车）→ 自动答，不打扰用户。
-	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck|Doyoutrustthefilesinthisfolder/, enter: true, kind: "auto" },
+	// auto：无害启动提示（安全检查 / 菜单回车）→ 自动答，不打扰用户。
+	{ re: /Entertoconfirm·Esctocancel|1\.Yes,Itrustthisfolder|Quicksafetycheck/, enter: true, kind: "auto" },
+	// 目录信任：不同引擎语义不同 —— codex 是 [y/N]（默认 No，回车=拒绝/取消，易误退），
+	// 多数引擎回车即确认信任。故对 codex 发 "y"+\r（信任当前工作区），其余引擎维持回车。
+	{ re: /Doyoutrustthefilesinthisfolder/, enter: true, kind: "auto", engineKeys: { codex: ["y", "\r"] } },
 	// critical：真正的 y/n 权限门 → 不自动点，置 pendingApproval 上报用户决定。
 	{ re: /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No/, y: true, kind: "critical" },
 	// auto：菜单/回车类 → 自动答。
@@ -1178,7 +1181,8 @@ var AgentRegistry = class {
 						engine: handle.type,
 						agentId: handle.id,
 						at: now,
-						answered: false
+						answered: false,
+						answerType: "yes_no"
 					};
 					this.notify();
 				}
@@ -1188,7 +1192,24 @@ var AgentRegistry = class {
 			m.answered.push({ sig, at: pattern.enter === true ? Infinity : now });
 			if (m.answered.length > 40) m.answered.shift();
 			try {
-				if (pattern.enter === true) {
+				if (pattern.engineKeys && pattern.engineKeys[handle.type]) {
+					const keys = pattern.engineKeys[handle.type];
+					const last = keys.length - 1;
+					for (let i = 0; i < keys.length; i++) {
+						const k = keys[i];
+						if (i === last) {
+							setTimeout(() => {
+								try {
+									handle.pty.write(k);
+								} catch {}
+							}, 200);
+						} else {
+							try {
+								handle.pty.write(k);
+							} catch {}
+						}
+					}
+				} else if (pattern.enter === true) {
 					handle.pty.write("\r");
 				} else {
 					// y + Enter (two-phase, same discipline as send/submit).
@@ -1610,10 +1631,13 @@ var AgentRegistry = class {
 			handle.pty.kill(signal);
 		} catch {}
 	}
-	/** Click-confirm a prompt: sends "1" + Enter (approves claude/opencode permission dialogs). */
+	/** Click-confirm a prompt. Picks the right key per prompt type/engine:
+	 * y/n gates send "y"/"n" (never the bare "1", which confuses codex and can
+	 * make it exit); numbered menus keep the numeric choice. */
 	approve(id, choice = "1") {
 		const handle = this.requireLive(id);
-		handle.pty.write(String(choice));
+		const key = this._approvalKey(handle, choice);
+		handle.pty.write(key);
 		setTimeout(() => {
 			try {
 				handle.pty.write("\r");
@@ -1625,6 +1649,22 @@ var AgentRegistry = class {
 			this.notify();
 		}
 		handle.updatedAt = Date.now();
+	}
+	/** Resolve the key to press for an approval, per prompt type. Prefers the
+	 * held pendingApproval (known y/n gate); otherwise inspects the transcript
+	 * tail for a y/n vs numbered-menu signature. */
+	_approvalKey(handle, choice) {
+		const c = String(choice).trim().toLowerCase();
+		const isYes = ["1", "y", "yes", "true", "on"].includes(c);
+		const isNo = ["2", "n", "no", "false", "off"].includes(c);
+		const pa = handle.pendingApproval;
+		if (pa !== void 0 && pa.answerType === "yes_no") return isYes ? "y" : isNo ? "n" : (c.slice(0, 1) || "y");
+		// 无挂起记录：从转录尾判断是 y/n 还是编号菜单。
+		const tail = stripAnsi(String(handle.transcript ?? "").slice(-900));
+		const compact = tail.replace(/\s+/g, "");
+		const looksYesNo = /Doyouwanttoproceed|Proceed\?|\(y\/n\)|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(Y\/n\)|yes\/no|Yes\/No|continue\?|areyousure/i.test(compact);
+		if (looksYesNo) return isYes ? "y" : isNo ? "n" : (c.slice(0, 1) || "y");
+		return c; // 编号菜单或未知 → 保留用户/默认的数字。
 	}
 	/** Start a NEW conversation inside the agent (per-engine command, two-phase submit). */
 	newSession(id) {
